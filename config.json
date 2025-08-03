@@ -1,0 +1,11 @@
+{
+    "printer_name": "Canon MF220 Series",
+    "port": 9100,
+    "use_pdf_conversion": true,
+    "save_pdf_file": false,
+    "auto_start": false,
+    "service_name": "PrinterOne",
+    "service_description": "PrinterOne - Network print server for raw print data",
+    "manual": true,
+    "minimize_to_tray": true
+}

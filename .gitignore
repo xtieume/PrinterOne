@@ -1,0 +1,12 @@
+
+*.pdf
+
+# Build folders
+build/
+*.spec
+
+__pycache__/
+
+dist/
+
+logs/
