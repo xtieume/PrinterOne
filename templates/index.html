@@ -211,6 +211,101 @@
             font-size: 0.9rem;
         }
         
+        .print-settings {
+            background: #f8fffe;
+            border: 1px solid #d1fae5;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+        
+        .print-settings h4 {
+            color: #065f46;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+        
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .setting-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .setting-group label {
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+        }
+        
+        .setting-group select,
+        .setting-group input {
+            padding: 8px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            transition: border-color 0.3s ease;
+        }
+        
+        .setting-group select:focus,
+        .setting-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .settings-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            padding-top: 15px;
+            border-top: 1px solid #e5e7eb;
+        }
+        
+        .reset-button,
+        .toggle-button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .reset-button {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        
+        .reset-button:hover {
+            background: #fde68a;
+        }
+        
+        .toggle-button {
+            background: #e0e7ff;
+            color: #3730a3;
+        }
+        
+        .toggle-button:hover {
+            background: #c7d2fe;
+        }
+        
+        .settings-collapsed {
+            max-height: 60px;
+            overflow: hidden;
+        }
+        
+        .settings-collapsed .settings-grid,
+        .settings-collapsed .settings-actions {
+            display: none;
+        }
+        
         .hidden {
             display: none;
         }
@@ -227,6 +322,14 @@
             .header h1 {
                 font-size: 2rem;
             }
+            
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .settings-actions {
+                flex-direction: column;
+            }
         }
     </style>
 </head>
@@ -241,6 +344,73 @@
             <h4>🌐 Server Status</h4>
             <p>Connected to printer: <strong>{{ printer_name }}</strong></p>
             <p>Server: {{ server_ip }}:{{ server_port }}</p>
+        </div>
+        
+        <!-- Print Settings Panel -->
+        <div class="print-settings" id="printSettings">
+            <h4>🖨️ Print Settings</h4>
+            <div class="settings-grid">
+                <div class="setting-group">
+                    <label for="orientation">📄 Orientation:</label>
+                    <select id="orientation" name="orientation">
+                        <option value="portrait">Portrait (Dọc)</option>
+                        <option value="landscape">Landscape (Ngang)</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="duplex">📖 Print Mode:</label>
+                    <select id="duplex" name="duplex">
+                        <option value="simplex">Single-sided (1 mặt)</option>
+                        <option value="duplex_long">Double-sided Long Edge (2 mặt - cạnh dài)</option>
+                        <option value="duplex_short">Double-sided Short Edge (2 mặt - cạnh ngắn)</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="paperSize">📏 Paper Size:</label>
+                    <select id="paperSize" name="paperSize">
+                        <option value="A4">A4 (210 × 297 mm)</option>
+                        <option value="Letter">Letter (8.5 × 11 in)</option>
+                        <option value="Legal">Legal (8.5 × 14 in)</option>
+                        <option value="A3">A3 (297 × 420 mm)</option>
+                        <option value="A5">A5 (148 × 210 mm)</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="quality">✨ Print Quality:</label>
+                    <select id="quality" name="quality">
+                        <option value="draft">Draft (Nháp - nhanh)</option>
+                        <option value="normal" selected>Normal (Thường)</option>
+                        <option value="high">High Quality (Chất lượng cao)</option>
+                        <option value="best">Best Quality (Tốt nhất)</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="copies">📋 Number of Copies:</label>
+                    <input type="number" id="copies" name="copies" min="1" max="99" value="1">
+                </div>
+                
+                <div class="setting-group">
+                    <label for="colorMode">🎨 Color Mode:</label>
+                    <select id="colorMode" name="colorMode">
+                        <option value="color">Color (Màu)</option>
+                        <option value="grayscale">Grayscale (Xám)</option>
+                        <option value="monochrome">Black & White (Đen trắng)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="settings-actions">
+                <button type="button" id="resetSettings" class="reset-button">
+                    🔄 Reset to Default
+                </button>
+                <button type="button" id="toggleSettings" class="toggle-button">
+                    ⚙️ Hide Settings
+                </button>
+            </div>
         </div>
         
         <div class="drop-zone" id="dropZone">
@@ -337,11 +507,27 @@
             fileItems.appendChild(fileDiv);
         }
 
+        // Get current print settings
+        function getPrintSettings() {
+            return {
+                orientation: document.getElementById('orientation').value,
+                duplex: document.getElementById('duplex').value,
+                paperSize: document.getElementById('paperSize').value,
+                quality: document.getElementById('quality').value,
+                copies: parseInt(document.getElementById('copies').value) || 1,
+                colorMode: document.getElementById('colorMode').value
+            };
+        }
+
         // Upload and print file
         async function uploadAndPrint(fileItem) {
             try {
                 const formData = new FormData();
                 formData.append('file', fileItem.file);
+                
+                // Add print settings
+                const settings = getPrintSettings();
+                formData.append('printSettings', JSON.stringify(settings));
                 
                 updateFileStatus(fileItem.id, 'uploading', 'Uploading...', 0);
                 
@@ -352,11 +538,14 @@
                 
                 if (response.ok) {
                     const result = await response.json();
-                    updateFileStatus(fileItem.id, 'printing', 'Printing...', 50);
+                    const copies = settings.copies;
+                    const statusMsg = copies > 1 ? `Printing ${copies} copies...` : 'Printing...';
+                    updateFileStatus(fileItem.id, 'printing', statusMsg, 50);
                     
                     // Simulate printing progress
                     setTimeout(() => {
-                        updateFileStatus(fileItem.id, 'completed', 'Printed ✓', 100);
+                        const completedMsg = copies > 1 ? `Printed ${copies} copies ✓` : 'Printed ✓';
+                        updateFileStatus(fileItem.id, 'completed', completedMsg, 100);
                     }, 2000);
                 } else {
                     const error = await response.text();
@@ -403,6 +592,61 @@
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
+
+        // Settings controls
+        document.getElementById('resetSettings').addEventListener('click', () => {
+            document.getElementById('orientation').value = 'portrait';
+            document.getElementById('duplex').value = 'simplex';
+            document.getElementById('paperSize').value = 'A4';
+            document.getElementById('quality').value = 'normal';
+            document.getElementById('copies').value = 1;
+            document.getElementById('colorMode').value = 'color';
+        });
+
+        document.getElementById('toggleSettings').addEventListener('click', (e) => {
+            const settings = document.getElementById('printSettings');
+            const button = e.target;
+            
+            if (settings.classList.contains('settings-collapsed')) {
+                settings.classList.remove('settings-collapsed');
+                button.textContent = '⚙️ Hide Settings';
+            } else {
+                settings.classList.add('settings-collapsed');
+                button.textContent = '⚙️ Show Settings';
+            }
+        });
+
+        // Save settings to localStorage
+        function saveSettings() {
+            const settings = getPrintSettings();
+            localStorage.setItem('printerOneSettings', JSON.stringify(settings));
+        }
+
+        // Load settings from localStorage
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem('printerOneSettings');
+                if (saved) {
+                    const settings = JSON.parse(saved);
+                    document.getElementById('orientation').value = settings.orientation || 'portrait';
+                    document.getElementById('duplex').value = settings.duplex || 'simplex';
+                    document.getElementById('paperSize').value = settings.paperSize || 'A4';
+                    document.getElementById('quality').value = settings.quality || 'normal';
+                    document.getElementById('copies').value = settings.copies || 1;
+                    document.getElementById('colorMode').value = settings.colorMode || 'color';
+                }
+            } catch (e) {
+                console.log('Could not load saved settings');
+            }
+        }
+
+        // Auto-save settings when changed
+        document.querySelectorAll('#printSettings select, #printSettings input').forEach(element => {
+            element.addEventListener('change', saveSettings);
+        });
+
+        // Load settings on page load
+        loadSettings();
 
         // Auto-refresh page every 30 seconds to check server status
         setInterval(() => {

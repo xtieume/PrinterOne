@@ -143,6 +143,16 @@ except ImportError:
     FLASK_AVAILABLE = False
     print("Flask not available, web interface disabled")
 
+# File processing imports
+ADVANCED_PROCESSING = False
+try:
+    import PyPDF2
+    from docx import Document
+    ADVANCED_PROCESSING = True
+    print("Advanced file processing available")
+except ImportError:
+    print("Advanced file processing not available (install PyPDF2, python-docx)")
+
 # Global variables
 SERVER_RUNNING = True
 AUTO_START_MODE = False
@@ -559,25 +569,121 @@ class PrinterOneServer:
             
             return f"Binary/Unknown format ({len(data)} bytes)"
     
-    def print_raw(self, data, printer_name):
-        """Send raw data to printer"""
+    def print_raw(self, data, printer_name, print_settings=None):
+        """Send raw data to printer with settings"""
         try:
             self.log(f"[INFO] Opening printer: {printer_name}")
             hPrinter = win32print.OpenPrinter(printer_name)
             
-            job_info = ("RAW Print Job", None, "RAW")
+            # Apply print settings if provided
+            if print_settings:
+                self.apply_print_settings(hPrinter, printer_name, print_settings)
+            
+            job_info = ("PrinterOne Web Job", None, "RAW")
             hJob = win32print.StartDocPrinter(hPrinter, 1, job_info)
-            win32print.StartPagePrinter(hPrinter)
-            win32print.WritePrinter(hPrinter, data)
-            win32print.EndPagePrinter(hPrinter)
+            
+            # Handle multiple copies
+            copies = 1
+            if print_settings and 'copies' in print_settings:
+                copies = max(1, int(print_settings.get('copies', 1)))
+            
+            for copy_num in range(copies):
+                if copies > 1:
+                    self.log(f"[PRINT] Printing copy {copy_num + 1}/{copies}")
+                
+                win32print.StartPagePrinter(hPrinter)
+                win32print.WritePrinter(hPrinter, data)
+                win32print.EndPagePrinter(hPrinter)
+            
             win32print.EndDocPrinter(hPrinter)
             win32print.ClosePrinter(hPrinter)
             
-            self.log(f"[OK] Successfully printed {len(data)} bytes.")
+            copies_msg = f" ({copies} copies)" if copies > 1 else ""
+            self.log(f"[OK] Successfully printed {len(data)} bytes{copies_msg}.")
             return True
         except Exception as e:
             self.log(f"[!] Print error: {e}")
             return False
+    
+    def apply_print_settings(self, hPrinter, printer_name, print_settings):
+        """Apply Windows print settings to printer"""
+        try:
+            self.log(f"[SETTINGS] Applying print settings: {print_settings}")
+            
+            # Get printer defaults
+            try:
+                pDevMode = win32print.GetPrinter(hPrinter, 2)["pDevMode"]
+                if not pDevMode:
+                    # Create default devmode if none exists
+                    pDevMode = win32print.DocumentProperties(0, hPrinter, printer_name, None, None, 0)
+            except:
+                self.log("[SETTINGS] Could not get printer devmode, using defaults")
+                return
+            
+            # Apply orientation
+            if print_settings.get('orientation') == 'landscape':
+                pDevMode.Orientation = 2  # DMORIENT_LANDSCAPE
+                self.log("[SETTINGS] Set orientation to landscape")
+            else:
+                pDevMode.Orientation = 1  # DMORIENT_PORTRAIT
+                self.log("[SETTINGS] Set orientation to portrait")
+            
+            # Apply duplex settings
+            duplex_mode = print_settings.get('duplex', 'simplex')
+            if duplex_mode == 'duplex_long':
+                pDevMode.Duplex = 2  # DMDUP_VERTICAL (long edge)
+                self.log("[SETTINGS] Set duplex to long edge")
+            elif duplex_mode == 'duplex_short':
+                pDevMode.Duplex = 3  # DMDUP_HORIZONTAL (short edge)
+                self.log("[SETTINGS] Set duplex to short edge")
+            else:
+                pDevMode.Duplex = 1  # DMDUP_SIMPLEX (single-sided)
+                self.log("[SETTINGS] Set duplex to single-sided")
+            
+            # Apply paper size
+            paper_size = print_settings.get('paperSize', 'A4')
+            paper_sizes = {
+                'A3': 8,    # DMPAPER_A3
+                'A4': 9,    # DMPAPER_A4
+                'A5': 11,   # DMPAPER_A5
+                'Letter': 1, # DMPAPER_LETTER
+                'Legal': 5   # DMPAPER_LEGAL
+            }
+            if paper_size in paper_sizes:
+                pDevMode.PaperSize = paper_sizes[paper_size]
+                self.log(f"[SETTINGS] Set paper size to {paper_size}")
+            
+            # Apply print quality
+            quality = print_settings.get('quality', 'normal')
+            quality_settings = {
+                'draft': -1,   # DMRES_DRAFT
+                'normal': -2,  # DMRES_MEDIUM
+                'high': -3,    # DMRES_HIGH
+                'best': -4     # DMRES_HIGH (best available)
+            }
+            if quality in quality_settings:
+                pDevMode.PrintQuality = quality_settings[quality]
+                self.log(f"[SETTINGS] Set print quality to {quality}")
+            
+            # Apply color mode
+            color_mode = print_settings.get('colorMode', 'color')
+            if color_mode == 'monochrome':
+                pDevMode.Color = 1  # DMCOLOR_MONOCHROME
+                self.log("[SETTINGS] Set color mode to monochrome")
+            elif color_mode == 'grayscale':
+                pDevMode.Color = 1  # DMCOLOR_MONOCHROME (closest to grayscale)
+                self.log("[SETTINGS] Set color mode to grayscale")
+            else:
+                pDevMode.Color = 2  # DMCOLOR_COLOR
+                self.log("[SETTINGS] Set color mode to color")
+            
+            # Apply the settings
+            win32print.SetPrinter(hPrinter, 2, {'pDevMode': pDevMode}, 0)
+            self.log("[SETTINGS] Print settings applied successfully")
+            
+        except Exception as e:
+            self.log(f"[SETTINGS] Error applying print settings: {e}")
+            # Continue anyway - settings are optional
     
     
     def handle_client(self, client_socket, address):
@@ -793,6 +899,442 @@ class PrinterOneServer:
         
         self.log("[DONE] Server stopped")
 
+class FileProcessor:
+    """File processing utilities for different formats"""
+    
+    def __init__(self, log_callback=None):
+        self.log_callback = log_callback
+    
+    def log(self, message):
+        """Log message"""
+        print(message)
+        if self.log_callback:
+            self.log_callback(message)
+    
+    def process_file_for_printer(self, file_data, filename, printer_name="", print_settings=None):
+        """Process file based on type for printing with settings"""
+        try:
+            file_ext = filename.lower().split('.')[-1] if '.' in filename else ''
+            self.log(f"[PROCESS] Processing {filename} ({file_ext}) for printer: {printer_name}")
+            
+            # Log print settings
+            if print_settings:
+                self.log(f"[SETTINGS] Print settings: {print_settings}")
+            
+            # For PDF printers, convert everything to PDF with settings
+            if "pdf" in printer_name.lower():
+                return self.convert_to_pdf(file_data, filename, print_settings)
+            
+            # For regular printers, convert to appropriate format
+            if file_ext == 'pdf':
+                return self.process_pdf(file_data, filename, print_settings)
+            elif file_ext in ['jpg', 'jpeg', 'png', 'bmp', 'gif']:
+                return self.process_image(file_data, filename, print_settings)
+            elif file_ext in ['doc', 'docx']:
+                return self.process_document(file_data, filename, print_settings)
+            elif file_ext in ['txt', 'log']:
+                return self.process_text(file_data, filename, print_settings)
+            else:
+                self.log(f"[PROCESS] Unsupported file type: {file_ext}")
+                return file_data  # Return as-is for raw printing
+                
+        except Exception as e:
+            self.log(f"[PROCESS] Error processing {filename}: {e}")
+            return file_data  # Return original data if processing fails
+    
+    def convert_to_pdf(self, file_data, filename, print_settings=None):
+        """Convert any file to PDF format with settings"""
+        try:
+            file_ext = filename.lower().split('.')[-1] if '.' in filename else ''
+            
+            if file_ext == 'pdf':
+                # Already PDF, apply settings if needed
+                return self.apply_pdf_settings(file_data, filename, print_settings)
+            elif file_ext in ['txt', 'log']:
+                return self.text_to_pdf(file_data, filename, print_settings)
+            elif file_ext in ['jpg', 'jpeg', 'png', 'bmp', 'gif']:
+                return self.image_to_pdf(file_data, filename, print_settings)
+            elif file_ext in ['doc', 'docx']:
+                return self.document_to_pdf(file_data, filename, print_settings)
+            else:
+                # For unknown formats, create a PDF with filename info
+                return self.create_info_pdf(filename, len(file_data), print_settings)
+                
+        except Exception as e:
+            self.log(f"[PROCESS] Error converting {filename} to PDF: {e}")
+            return self.create_error_pdf(filename, str(e))
+    
+    def get_page_size(self, paper_size):
+        """Get page dimensions for paper size"""
+        from reportlab.lib.pagesizes import letter, legal, A3, A4, A5
+        
+        sizes = {
+            'A3': A3,
+            'A4': A4,
+            'A5': A5,
+            'Letter': letter,
+            'Legal': legal
+        }
+        return sizes.get(paper_size, A4)
+    
+    def apply_pdf_settings(self, file_data, filename, print_settings=None):
+        """Apply print settings to existing PDF"""
+        try:
+            if not print_settings:
+                return file_data
+            
+            # For existing PDFs, we mainly log the settings
+            # The actual print job settings will be applied at printer level
+            self.log(f"[SETTINGS] PDF will be printed with: {print_settings}")
+            return file_data
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error applying PDF settings: {e}")
+            return file_data
+    
+    def process_pdf(self, file_data, filename, print_settings=None):
+        """Process PDF files for regular printers"""
+        if not ADVANCED_PROCESSING:
+            self.log("[PROCESS] PyPDF2 not available, sending PDF as raw data")
+            return file_data
+        
+        try:
+            # Extract text from PDF and convert to printable format
+            import io
+            pdf_file = io.BytesIO(file_data)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            text_content = ""
+            for page_num in range(len(pdf_reader.pages)):
+                page = pdf_reader.pages[page_num]
+                text_content += f"--- Page {page_num + 1} ---\n"
+                text_content += page.extract_text()
+                text_content += "\n\n"
+            
+            if text_content.strip():
+                self.log(f"[PROCESS] Extracted text from PDF ({len(text_content)} chars)")
+                return text_content.encode('utf-8')
+            else:
+                self.log("[PROCESS] No text found in PDF, sending as raw data")
+                return file_data
+                
+        except Exception as e:
+            self.log(f"[PROCESS] Error processing PDF: {e}")
+            return file_data
+    
+    def process_image(self, file_data, filename):
+        """Process image files for printing"""
+        try:
+            from PIL import Image
+            import io
+            
+            # Open image
+            img = Image.open(io.BytesIO(file_data))
+            
+            # Convert to RGB if necessary
+            if img.mode in ('RGBA', 'P'):
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                background.paste(img, mask=img.split()[-1])
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Resize if too large (max 800x600 for printing)
+            max_size = (800, 600)
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            
+            # Convert to printable text representation or create PDF
+            return self.image_to_pdf_data(img, filename)
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error processing image {filename}: {e}")
+            return file_data
+    
+    def process_document(self, file_data, filename):
+        """Process DOC/DOCX files"""
+        if not ADVANCED_PROCESSING:
+            self.log("[PROCESS] python-docx not available, sending document as raw data")
+            return file_data
+        
+        try:
+            import io
+            doc_file = io.BytesIO(file_data)
+            doc = Document(doc_file)
+            
+            text_content = f"Document: {filename}\n"
+            text_content += "=" * 50 + "\n\n"
+            
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text_content += paragraph.text + "\n"
+            
+            self.log(f"[PROCESS] Extracted text from document ({len(text_content)} chars)")
+            return text_content.encode('utf-8')
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error processing document {filename}: {e}")
+            return file_data
+    
+    def process_text(self, file_data, filename):
+        """Process text files"""
+        try:
+            # Try to decode text and ensure it's printable
+            try:
+                text = file_data.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    text = file_data.decode('latin-1')
+                except UnicodeDecodeError:
+                    text = file_data.decode('utf-8', errors='ignore')
+            
+            # Add header
+            processed_text = f"Text File: {filename}\n"
+            processed_text += "=" * 50 + "\n\n"
+            processed_text += text
+            
+            return processed_text.encode('utf-8')
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error processing text file {filename}: {e}")
+            return file_data
+    
+    def text_to_pdf(self, file_data, filename, print_settings=None):
+        """Convert text to PDF with settings"""
+        try:
+            text = file_data.decode('utf-8', errors='ignore')
+            
+            temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            temp_pdf_path = temp_pdf.name
+            temp_pdf.close()
+            
+            # Get page size from settings
+            page_size = letter  # default
+            if print_settings and 'paperSize' in print_settings:
+                page_size = self.get_page_size(print_settings['paperSize'])
+            
+            # Determine orientation
+            if print_settings and print_settings.get('orientation') == 'landscape':
+                page_size = (page_size[1], page_size[0])  # Swap width/height
+            
+            c = canvas.Canvas(temp_pdf_path, pagesize=page_size)
+            page_width, page_height = page_size
+            
+            # Header
+            c.setFont("Helvetica-Bold", 16)
+            c.drawString(50, page_height - 50, f"Text File: {filename}")
+            
+            # Print settings info
+            if print_settings:
+                c.setFont("Helvetica", 8)
+                settings_text = f"Settings: {print_settings.get('paperSize', 'A4')}, {print_settings.get('orientation', 'portrait')}, {print_settings.get('quality', 'normal')}"
+                c.drawString(50, page_height - 70, settings_text)
+            
+            c.setFont("Helvetica", 10)
+            y_position = page_height - 100
+            margin_left = 50
+            margin_right = page_width - 50
+            line_width = int((margin_right - margin_left) / 6)  # Approximate chars per line
+            
+            for line in text.split('\n'):
+                if y_position < 50:
+                    c.showPage()
+                    y_position = page_height - 50
+                
+                # Handle long lines
+                while len(line) > line_width:
+                    c.drawString(margin_left, y_position, line[:line_width])
+                    line = line[line_width:]
+                    y_position -= 15
+                    if y_position < 50:
+                        c.showPage()
+                        y_position = page_height - 50
+                
+                c.drawString(margin_left, y_position, line)
+                y_position -= 15
+            
+            c.save()
+            
+            with open(temp_pdf_path, 'rb') as f:
+                pdf_data = f.read()
+            
+            os.unlink(temp_pdf_path)
+            return pdf_data
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error converting text to PDF: {e}")
+            return file_data
+    
+    def image_to_pdf(self, file_data, filename):
+        """Convert image to PDF"""
+        try:
+            from PIL import Image
+            import io
+            
+            img = Image.open(io.BytesIO(file_data))
+            
+            # Convert to RGB
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            temp_pdf_path = temp_pdf.name
+            temp_pdf.close()
+            
+            # Scale image to fit page
+            page_width, page_height = letter
+            img_width, img_height = img.size
+            
+            # Calculate scaling
+            scale = min((page_width - 100) / img_width, (page_height - 100) / img_height)
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+            
+            c = canvas.Canvas(temp_pdf_path, pagesize=letter)
+            
+            # Save image temporarily
+            temp_img = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+            temp_img_path = temp_img.name
+            temp_img.close()
+            
+            img.save(temp_img_path, 'JPEG', quality=85)
+            
+            # Add image to PDF
+            x = (page_width - new_width) / 2
+            y = (page_height - new_height) / 2
+            
+            c.drawImage(temp_img_path, x, y, width=new_width, height=new_height)
+            c.save()
+            
+            with open(temp_pdf_path, 'rb') as f:
+                pdf_data = f.read()
+            
+            # Cleanup
+            os.unlink(temp_pdf_path)
+            os.unlink(temp_img_path)
+            
+            return pdf_data
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error converting image to PDF: {e}")
+            return file_data
+    
+    def image_to_pdf_data(self, img, filename):
+        """Convert PIL Image to PDF data"""
+        try:
+            temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            temp_pdf_path = temp_pdf.name
+            temp_pdf.close()
+            
+            c = canvas.Canvas(temp_pdf_path, pagesize=letter)
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(100, 750, f"Image: {filename}")
+            
+            # Save image temporarily
+            temp_img = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+            temp_img_path = temp_img.name
+            temp_img.close()
+            
+            img.save(temp_img_path, 'JPEG', quality=85)
+            
+            # Calculate dimensions
+            page_width, page_height = letter
+            img_width, img_height = img.size
+            scale = min((page_width - 100) / img_width, (page_height - 150) / img_height)
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+            
+            x = (page_width - new_width) / 2
+            y = page_height - 100 - new_height
+            
+            c.drawImage(temp_img_path, x, y, width=new_width, height=new_height)
+            c.save()
+            
+            with open(temp_pdf_path, 'rb') as f:
+                pdf_data = f.read()
+            
+            # Cleanup
+            os.unlink(temp_pdf_path)
+            os.unlink(temp_img_path)
+            
+            return pdf_data
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error creating PDF from image: {e}")
+            return None
+    
+    def document_to_pdf(self, file_data, filename):
+        """Convert document to PDF"""
+        try:
+            # Extract text first
+            processed_text = self.process_document(file_data, filename)
+            # Convert text to PDF
+            return self.text_to_pdf(processed_text, filename)
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error converting document to PDF: {e}")
+            return file_data
+    
+    def create_info_pdf(self, filename, file_size):
+        """Create info PDF for unsupported formats"""
+        try:
+            temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            temp_pdf_path = temp_pdf.name
+            temp_pdf.close()
+            
+            c = canvas.Canvas(temp_pdf_path, pagesize=letter)
+            c.setFont("Helvetica-Bold", 16)
+            c.drawString(100, 700, "File Processing Information")
+            
+            c.setFont("Helvetica", 12)
+            c.drawString(100, 650, f"Filename: {filename}")
+            c.drawString(100, 630, f"File size: {file_size} bytes")
+            c.drawString(100, 610, "File type: Unsupported for text extraction")
+            c.drawString(100, 590, "Status: File sent as raw data to printer")
+            
+            c.drawString(100, 550, "Note: This file format cannot be converted to text.")
+            c.drawString(100, 530, "The original file data has been sent directly to the printer.")
+            
+            c.save()
+            
+            with open(temp_pdf_path, 'rb') as f:
+                pdf_data = f.read()
+            
+            os.unlink(temp_pdf_path)
+            return pdf_data
+            
+        except Exception as e:
+            self.log(f"[PROCESS] Error creating info PDF: {e}")
+            return b"File processing information not available."
+    
+    def create_error_pdf(self, filename, error_msg):
+        """Create error PDF"""
+        try:
+            temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            temp_pdf_path = temp_pdf.name
+            temp_pdf.close()
+            
+            c = canvas.Canvas(temp_pdf_path, pagesize=letter)
+            c.setFont("Helvetica-Bold", 16)
+            c.drawString(100, 700, "File Processing Error")
+            
+            c.setFont("Helvetica", 12)
+            c.drawString(100, 650, f"Filename: {filename}")
+            c.drawString(100, 630, f"Error: {error_msg}")
+            c.drawString(100, 610, "Status: Could not process file")
+            
+            c.save()
+            
+            with open(temp_pdf_path, 'rb') as f:
+                pdf_data = f.read()
+            
+            os.unlink(temp_pdf_path)
+            return pdf_data
+            
+        except:
+            return b"File processing error occurred."
+
 class WebServer:
     """Flask web server for web interface"""
     
@@ -802,6 +1344,7 @@ class WebServer:
         self.app = None
         self.web_thread = None
         self.running = False
+        self.file_processor = FileProcessor(log_callback=log_callback)
         
         if FLASK_AVAILABLE:
             self.setup_flask_app()
@@ -841,31 +1384,38 @@ class WebServer:
                     return jsonify({'error': 'No file selected'}), 400
                 
                 filename = secure_filename(file.filename)
-                self.log(f"[WEB] Received file: {filename} ({file.content_length} bytes)")
+                file_size = file.content_length or 0
+                self.log(f"[WEB] Received file: {filename} ({file_size} bytes)")
                 
                 # Read file data
                 file_data = file.read()
                 
-                # Check if we need to convert to PDF for PDF printers
+                # Get printer info
                 printer_name = self.printer_server.config.get("printer_name", "")
-                use_pdf_conversion = self.printer_server.config.get("use_pdf_conversion", True)
                 
-                if printer_name == "Microsoft Print to PDF" and use_pdf_conversion:
-                    self.log(f"[WEB] Converting {filename} to PDF for PDF printer...")
+                # Get print settings from form data
+                print_settings = None
+                if 'printSettings' in request.form:
                     try:
-                        # For text files, convert to PDF
-                        if filename.lower().endswith(('.txt', '.log')):
-                            pdf_data = self.printer_server.convert_raw_to_pdf(file_data, save_file=False)
-                            if pdf_data:
-                                file_data = pdf_data
-                                self.log(f"[WEB] File converted to PDF ({len(file_data)} bytes)")
-                            else:
-                                self.log("[WEB] PDF conversion failed, using raw data")
+                        import json
+                        print_settings = json.loads(request.form['printSettings'])
+                        self.log(f"[WEB] Received print settings: {print_settings}")
                     except Exception as e:
-                        self.log(f"[WEB] PDF conversion error: {e}")
+                        self.log(f"[WEB] Error parsing print settings: {e}")
                 
-                # Print the file
-                success = self.printer_server.print_raw(file_data, printer_name)
+                # Process file using FileProcessor with settings
+                self.log(f"[WEB] Processing file for printer: {printer_name}")
+                processed_data = self.file_processor.process_file_for_printer(
+                    file_data, filename, printer_name, print_settings
+                )
+                
+                if processed_data != file_data:
+                    self.log(f"[WEB] File processed successfully ({len(processed_data)} bytes)")
+                else:
+                    self.log(f"[WEB] Using original file data ({len(file_data)} bytes)")
+                
+                # Print the processed file with settings
+                success = self.printer_server.print_raw(processed_data, printer_name, print_settings)
                 
                 if success:
                     self.log(f"[WEB] Successfully printed {filename}")
