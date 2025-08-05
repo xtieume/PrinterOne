@@ -16,9 +16,9 @@ def install_requirements():
     print("Installing requirements...")
     try:
         subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
-        print("✅ Requirements installed successfully")
+        print("[OK] Requirements installed successfully")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error installing requirements: {e}")
+        print(f"[ERROR] Error installing requirements: {e}")
         return False
     return True
 
@@ -37,7 +37,7 @@ def clean_build():
             try:
                 shutil.rmtree("dist")
             except PermissionError:
-                print("⚠️  Permission denied removing dist folder, trying to force...")
+                print("[WARNING]  Permission denied removing dist folder, trying to force...")
                 # Try to remove individual files first
                 for root, dirs, files in os.walk("dist", topdown=False):
                     for file in files:
@@ -52,7 +52,7 @@ def clean_build():
                 try:
                     os.rmdir("dist")
                 except:
-                    print("⚠️  Could not fully clean dist folder, continuing...")
+                    print("[WARNING]  Could not fully clean dist folder, continuing...")
         
         # Clean spec files
         spec_files = ["PrinterOne.spec", "PrinterOneManager.spec"]
@@ -60,10 +60,10 @@ def clean_build():
             if os.path.exists(spec_file):
                 force_remove_file(spec_file)
         
-        print("✅ Build cleaned successfully")
+        print("[OK] Build cleaned successfully")
         return True
     except Exception as e:
-        print(f"❌ Error cleaning build: {e}")
+        print(f"[ERROR] Error cleaning build: {e}")
         return False
 
 
@@ -101,10 +101,10 @@ def build_gui_exe():
         ]
         
         subprocess.run(cmd, check=True)
-        print("✅ PrinterOne GUI executable built successfully")
+        print("[OK] PrinterOne GUI executable built successfully")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error building PrinterOne executable: {e}")
+        print(f"[ERROR] Error building PrinterOne executable: {e}")
         return False
 
 def check_gui_executable():
@@ -114,13 +114,13 @@ def check_gui_executable():
         exe_path = os.path.join("dist", "PrinterOne.exe")
         if os.path.exists(exe_path):
             file_size = os.path.getsize(exe_path)
-            print(f"✅ PrinterOne.exe built successfully ({file_size:,} bytes)")
+            print(f"[OK] PrinterOne.exe built successfully ({file_size:,} bytes)")
             return True
         else:
-            print("❌ PrinterOne.exe not found in dist directory")
+            print("[ERROR] PrinterOne.exe not found in dist directory")
             return False
     except Exception as e:
-        print(f"❌ Error checking executable: {e}")
+        print(f"[ERROR] Error checking executable: {e}")
         return False
 
 def kill_running_processes():
@@ -167,11 +167,11 @@ def kill_running_processes():
         print(f"Error killing processes: {e}")
     
     if killed_count > 0:
-        print(f"✅ Killed {killed_count} process(es)")
+        print(f"[OK] Killed {killed_count} process(es)")
         # Wait a moment for processes to fully terminate and files to be released
         time.sleep(2)
     else:
-        print("✅ No running processes found")
+        print("[OK] No running processes found")
     
     return killed_count > 0
 
@@ -186,10 +186,10 @@ def force_remove_file(filepath):
         os.remove(filepath)
         return True
     except PermissionError:
-        print(f"⚠️  Permission denied for {filepath} - file may be in use")
+        print(f"[WARNING]  Permission denied for {filepath} - file may be in use")
         return False
     except Exception as e:
-        print(f"❌ Error removing {filepath}: {e}")
+        print(f"[ERROR] Error removing {filepath}: {e}")
         return False
 
 def main():
@@ -209,26 +209,26 @@ def main():
     try:
         clean_build()
     except Exception as e:
-        print(f"⚠️  Some files could not be cleaned: {e}")
+        print(f"[WARNING]  Some files could not be cleaned: {e}")
         print("Trying to kill processes and continue...")
         kill_running_processes()
         time.sleep(1)
     
     # Build GUI executable (includes integrated server)
-    print("\n🔨 Building PrinterOne GUI executable...")
+    print("\n[BUILD] Building PrinterOne GUI executable...")
     if not build_gui_exe():
-        print("❌ Failed to build GUI executable. Stopping build process.")
+        print("[ERROR] Failed to build GUI executable. Stopping build process.")
         return 1
     
     # Check executable
-    print("\n🔍 Verifying build results...")
+    print("\n[VERIFY] Verifying build results...")
     if not check_gui_executable():
-        print("❌ Build verification failed. Executable is missing.")
+        print("[ERROR] Build verification failed. Executable is missing.")
         return 1
     
     print()
-    print("🎉 Build completed successfully!")
-    print("📁 Generated file in dist/ folder:")
+    print("[SUCCESS] Build completed successfully!")
+    print("[FOLDER] Generated file in dist/ folder:")
     print("  • dist/PrinterOne.exe (GUI application with integrated server)")
     print()
     print("Usage:")

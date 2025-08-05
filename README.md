@@ -8,6 +8,8 @@
 
 A comprehensive TCP network print server with integrated GUI management and system tray support for Windows.
 
+> ⚠️ **Quick Fix**: If server starts but clients can't connect, check if port 9100 is blocked by firewall. Consider using [SimpleWall](https://github.com/henrypp/simplewall) for easy firewall management.
+
 **Copyright (c) 2025 xtieume@gmail.com**  
 **GitHub: https://github.com/xtieume/PrinterOne**
 
@@ -45,6 +47,7 @@ A comprehensive TCP network print server with integrated GUI management and syst
 2. Run `PrinterOne.exe gui`
 3. Select your printer and configure settings
 4. Click "Start Server"
+5. ⚠️ **Important**: If clients can't connect, check firewall settings (see [Troubleshooting](#troubleshooting))
 
 ### Option 2: Build from Source
 ```bash
@@ -61,6 +64,14 @@ python build.py
 # Run the executable
 dist/PrinterOne.exe gui
 ```
+
+### ⚠️ Network Connectivity Requirements
+
+For network printing to work properly:
+- **Port 9100** must be accessible on your network
+- **Firewall** should allow PrinterOne.exe 
+- Some minimal Windows builds may require manual firewall configuration
+- Consider using [SimpleWall](https://github.com/henrypp/simplewall) for easy firewall management
 
 ## 🖥️ Usage Modes
 
@@ -136,7 +147,42 @@ def send_to_printer(data, host='192.168.1.100', port=9100):
 send_to_printer("Test print job")
 ```
 
-## 🔧 Advanced Features
+## � Windows Firewall & Network Security
+
+### Firewall Configuration (Important!)
+
+PrinterOne requires **port 9100** to be accessible for network printing. If clients can't connect after starting the server, follow these steps:
+
+#### Method 1: Using SimpleWall (Recommended)
+[SimpleWall](https://github.com/henrypp/simplewall) is a lightweight firewall manager that makes configuration easy:
+
+1. **Download SimpleWall**: Visit [https://github.com/henrypp/simplewall](https://github.com/henrypp/simplewall)
+2. **Install and run** SimpleWall
+3. **Add PrinterOne.exe** to the allowed applications list
+4. **Enable network access** for PrinterOne
+5. **Allow port 9100** for incoming connections
+
+#### Method 2: Windows Firewall Manual Configuration
+```powershell
+# Run as Administrator
+New-NetFirewallRule -DisplayName "PrinterOne Port 9100" -Direction Inbound -Protocol TCP -LocalPort 9100 -Action Allow
+```
+
+#### Method 3: Windows Firewall GUI
+1. Open **Windows Defender Firewall** with Advanced Security
+2. Click **Inbound Rules** → **New Rule**
+3. Select **Port** → **TCP** → **Specific Local Ports**: `9100`
+4. **Allow the connection** → Apply to all profiles
+5. Name the rule "PrinterOne Port 9100"
+
+### Common Network Issues
+
+- **Minimal Windows builds** (Windows 10/11 LTSC, custom builds) may have restrictive default firewall settings
+- **Corporate networks** may block port 9100 by policy
+- **Antivirus software** may interfere with network connections
+- **Virtual machines** may require additional network configuration
+
+## �🔧 Advanced Features
 
 ### System Tray Integration
 - Right-click tray icon for quick actions
@@ -194,14 +240,30 @@ python build.py --clean
 
 ### Common Issues
 
+**Q: Server starts but clients can't connect to port 9100**  
+A: ⚠️ **IMPORTANT**: Check if port 9100 is publicly accessible. Some minimal Windows builds may have restrictive firewall settings that block the port.
+
+**Solution**: Install a firewall manager like [SimpleWall](https://github.com/henrypp/simplewall) to properly allow port 9100:
+1. Download and install [SimpleWall](https://github.com/henrypp/simplewall)
+2. Add PrinterOne.exe to allowed applications
+3. Ensure port 9100 is open for incoming connections
+4. Alternative: Use Windows Firewall to create an inbound rule for port 9100
+
 **Q: Tray icon not visible**  
 A: Check Windows notification area settings to show PrinterOne icon.
 
 **Q: Port already in use**  
-A: The server automatically kills conflicting processes. Check firewall settings.
+A: The server automatically kills conflicting processes. Check if another service is using port 9100.
 
 **Q: Printer not found**  
 A: Ensure the printer is installed and accessible from Windows. Use exact printer name from Windows printer list.
+
+### Firewall Configuration
+
+For proper network printing, ensure:
+- **Inbound**: Port 9100 TCP is open
+- **Application**: PrinterOne.exe is allowed through firewall
+- **Network**: Windows network discovery is enabled (optional)
 
 ### Debug Mode
 Enable verbose logging by running:

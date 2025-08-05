@@ -4,31 +4,126 @@ PrinterOne - Unified Server and GUI Application
 A comprehensive TCP print server with integrated GUI management and test client functionality
 """
 
+# Critical startup logging - Log everything from the very beginning
 import os
 import sys
+import time
 import json
 import socket
 import threading
 import subprocess
-import time
 import signal
 import tempfile
 import logging
 import glob
 import psutil
 import winreg
+import traceback
 from datetime import datetime, timedelta
 
-# GUI imports
-import tkinter as tk
-from tkinter import ttk
+# Setup early logging to capture startup issues
+def setup_early_logging():
+    """Setup logging as early as possible to capture startup issues"""
+    try:
+        # Create logs directory if it doesn't exist - use user temp if permission denied
+        logs_dir = "logs"
+        try:
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir)
+        except PermissionError:
+            # Fallback to user temp directory if permission denied
+            import tempfile
+            logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir, exist_ok=True)
+        
+        # Generate startup log filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        startup_log_filename = f"{timestamp}_startup.log"
+        startup_log_path = os.path.join(logs_dir, startup_log_filename)
+        
+        # Setup logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(startup_log_path, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        
+        logger = logging.getLogger('startup')
+        logger.info("=== PrinterOne Startup Log ===")
+        logger.info(f"Python version: {sys.version}")
+        logger.info(f"Platform: {sys.platform}")
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Script path: {os.path.abspath(__file__)}")
+        logger.info(f"Command line arguments: {sys.argv}")
+        logger.info(f"Environment variables: USERPROFILE={os.environ.get('USERPROFILE', 'NOT_SET')}")
+        
+        return logger
+    except Exception as e:
+        print(f"CRITICAL: Failed to setup early logging: {e}")
+        print(f"Exception type: {type(e).__name__}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return None
 
-# Windows-specific imports
-import win32print
+# Initialize early logging
+startup_logger = setup_early_logging()
 
-# PDF generation
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+try:
+    if startup_logger:
+        startup_logger.info("Starting import phase...")
+    
+    # Import GUI modules
+    try:
+        if startup_logger:
+            startup_logger.info("Importing GUI modules...")
+        import tkinter as tk
+        from tkinter import ttk
+        if startup_logger:
+            startup_logger.info("GUI modules imported successfully")
+    except ImportError as e:
+        if startup_logger:
+            startup_logger.error(f"Failed to import GUI modules: {e}")
+        raise
+    
+    # Import Windows-specific modules
+    try:
+        if startup_logger:
+            startup_logger.info("Importing Windows print modules...")
+        import win32print
+        if startup_logger:
+            startup_logger.info("Windows print modules imported successfully")
+    except ImportError as e:
+        if startup_logger:
+            startup_logger.error(f"Failed to import Windows modules: {e}")
+        raise
+    
+    # Import PDF generation
+    try:
+        if startup_logger:
+            startup_logger.info("Importing PDF modules...")
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter
+        if startup_logger:
+            startup_logger.info("PDF modules imported successfully")
+    except ImportError as e:
+        if startup_logger:
+            startup_logger.error(f"Failed to import PDF modules: {e}")
+        raise
+
+except Exception as e:
+    error_msg = f"CRITICAL: Import phase failed: {e}"
+    if startup_logger:
+        startup_logger.critical(error_msg)
+        startup_logger.critical(f"Exception type: {type(e).__name__}")
+        startup_logger.critical(f"Traceback: {traceback.format_exc()}")
+    else:
+        print(error_msg)
+        print(f"Exception type: {type(e).__name__}")
+        print(f"Traceback: {traceback.format_exc()}")
+    sys.exit(1)
 
 # System tray imports (optional)
 try:
@@ -47,11 +142,29 @@ class PrinterOneServer:
     """PrinterOne TCP Server"""
     
     def __init__(self, log_callback=None):
-        self.config = self.load_config()
-        self.server_socket = None
-        self.server_thread = None
-        self.running = False
-        self.log_callback = log_callback  # Callback function for logging to GUI
+        try:
+            if startup_logger:
+                startup_logger.info("Initializing PrinterOneServer...")
+            
+            self.config = self.load_config()
+            
+            if startup_logger:
+                startup_logger.info(f"Configuration loaded: {self.config}")
+            
+            self.server_socket = None
+            self.server_thread = None
+            self.running = False
+            self.log_callback = log_callback  # Callback function for logging to GUI
+            
+            if startup_logger:
+                startup_logger.info("PrinterOneServer initialized successfully")
+                
+        except Exception as e:
+            error_msg = f"Failed to initialize PrinterOneServer: {e}"
+            if startup_logger:
+                startup_logger.critical(error_msg)
+                startup_logger.critical(f"Traceback: {traceback.format_exc()}")
+            raise
     
     def log(self, message):
         """Log message to console and GUI if callback is set"""
@@ -80,17 +193,82 @@ class PrinterOneServer:
             "minimize_to_tray": True
         }
         
+        # Try multiple config file locations
+        config_paths = [
+            'config.json',  # Current directory first
+            os.path.join(os.path.expanduser('~'), 'PrinterOne', 'config.json'),  # User home
+            os.path.join(os.environ.get('APPDATA', ''), 'PrinterOne', 'config.json'),  # AppData
+            os.path.join(tempfile.gettempdir(), 'PrinterOne', 'config.json')  # Temp directory
+        ]
+        
+        # Store the successful config path for saving
+        self.config_path = None
+        
         try:
-            if os.path.exists('config.json'):
-                with open('config.json', 'r') as f:
-                    config = json.load(f)
-                    # Merge with defaults
-                    for key, value in default_config.items():
-                        if key not in config:
-                            config[key] = value
-                    return config
+            for config_path in config_paths:
+                try:
+                    config_path = os.path.abspath(config_path)
+                    if startup_logger:
+                        startup_logger.info(f"Trying to load configuration from: {config_path}")
+                    
+                    if os.path.exists(config_path):
+                        if startup_logger:
+                            startup_logger.info(f"Config file exists at: {config_path}")
+                        
+                        with open(config_path, 'r') as f:
+                            config = json.load(f)
+                            
+                        if startup_logger:
+                            startup_logger.info(f"Config loaded from file: {config}")
+                        
+                        # Merge with defaults
+                        for key, value in default_config.items():
+                            if key not in config:
+                                config[key] = value
+                                
+                        if startup_logger:
+                            startup_logger.info(f"Final merged config: {config}")
+                        
+                        self.config_path = config_path  # Remember successful path
+                        return config
+                except PermissionError:
+                    if startup_logger:
+                        startup_logger.warning(f"Permission denied accessing: {config_path}")
+                    continue
+                except Exception as e:
+                    if startup_logger:
+                        startup_logger.warning(f"Error loading from {config_path}: {e}")
+                    continue
+            
+            # No config file found or accessible
+            if startup_logger:
+                startup_logger.info("No config.json found or accessible, using defaults")
+                    
         except Exception as e:
-            self.log(f"[!] Error loading config.json: {e}")
+            error_msg = f"Error in config loading process: {e}"
+            if startup_logger:
+                startup_logger.error(error_msg)
+                startup_logger.error(f"Traceback: {traceback.format_exc()}")
+            self.log(f"[!] {error_msg}")
+        
+        if startup_logger:
+            startup_logger.info(f"Using default config: {default_config}")
+        
+        # Set a fallback config path for saving
+        if not self.config_path:
+            # Try to create a writable config directory
+            for base_path in [os.path.expanduser('~'), os.environ.get('APPDATA', ''), tempfile.gettempdir()]:
+                try:
+                    config_dir = os.path.join(base_path, 'PrinterOne')
+                    if not os.path.exists(config_dir):
+                        os.makedirs(config_dir, exist_ok=True)
+                    self.config_path = os.path.join(config_dir, 'config.json')
+                    break
+                except:
+                    continue
+            
+            if not self.config_path:
+                self.config_path = os.path.join(tempfile.gettempdir(), 'PrinterOne_config.json')
         
         return default_config
     
@@ -108,13 +286,49 @@ class PrinterOneServer:
             
             self.config["manual"] = True
             
-            with open('config.json', 'w') as f:
-                json.dump(self.config, f, indent=4)
+            # Use the config path determined during load, or try fallback locations
+            config_paths_to_try = []
             
-            self.log(f"[SAVE] Configuration saved to config.json")
-            return True
+            if hasattr(self, 'config_path') and self.config_path:
+                config_paths_to_try.append(self.config_path)
+            
+            # Fallback locations in order of preference
+            config_paths_to_try.extend([
+                'config.json',  # Current directory
+                os.path.join(os.path.expanduser('~'), 'PrinterOne', 'config.json'),  # User home
+                os.path.join(os.environ.get('APPDATA', ''), 'PrinterOne', 'config.json'),  # AppData
+                os.path.join(tempfile.gettempdir(), 'PrinterOne', 'config.json')  # Temp directory
+            ])
+            
+            # Try to save to each location until one succeeds
+            for config_path in config_paths_to_try:
+                try:
+                    # Ensure directory exists
+                    config_dir = os.path.dirname(config_path)
+                    if config_dir and not os.path.exists(config_dir):
+                        os.makedirs(config_dir, exist_ok=True)
+                    
+                    # Try to save
+                    with open(config_path, 'w') as f:
+                        json.dump(self.config, f, indent=4)
+                    
+                    self.log(f"[SAVE] Configuration saved to {config_path}")
+                    self.config_path = config_path  # Remember successful path
+                    return True
+                    
+                except PermissionError:
+                    self.log(f"[WARN] Permission denied saving to {config_path}, trying next location...")
+                    continue
+                except Exception as e:
+                    self.log(f"[WARN] Error saving to {config_path}: {e}, trying next location...")
+                    continue
+            
+            # If all locations failed
+            self.log(f"[!] Failed to save configuration to any location")
+            return False
+            
         except Exception as e:
-            self.log(f"[!] Error saving config.json: {e}")
+            self.log(f"[!] Error in save_config: {e}")
             return False
     
     def list_printers(self):
@@ -388,23 +602,115 @@ class PrinterOneServer:
     def kill_process_on_port(self, port):
         """Kill any process using the specified port"""
         try:
-            result = subprocess.run(['netstat', '-ano'], capture_output=True, text=True)
-            lines = result.stdout.split('\n')
-            
-            for line in lines:
-                if f':{port}' in line and 'LISTENING' in line:
-                    parts = line.split()
-                    if len(parts) >= 5:
-                        pid = parts[-1]
-                        try:
-                            subprocess.run(['taskkill', '/PID', pid, '/F'], 
-                                         capture_output=True, check=True)
-                            self.log(f"[KILL] Killed process {pid} using port {port}")
-                            time.sleep(1)
-                        except subprocess.CalledProcessError:
-                            self.log(f"[!] Failed to kill process {pid}")
+            # Use psutil instead of netstat to avoid snmpapi.dll dependency
+            for conn in psutil.net_connections():
+                if conn.laddr.port == port and conn.status == psutil.CONN_LISTEN:
+                    try:
+                        process = psutil.Process(conn.pid)
+                        process.terminate()
+                        self.log(f"[KILL] Terminated process {conn.pid} ({process.name()}) using port {port}")
+                        time.sleep(1)
+                        
+                        # Force kill if still running
+                        if process.is_running():
+                            process.kill()
+                            self.log(f"[KILL] Force killed process {conn.pid}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                        self.log(f"[!] Failed to kill process {conn.pid}: {e}")
         except Exception as e:
             self.log(f"[!] Error killing process on port {port}: {e}")
+    
+    def get_local_ip(self):
+        """Get the actual local IP address of the machine"""
+        try:
+            # Method 1: Try to connect to a remote server to determine local IP
+            test_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                # Connect to Google DNS (doesn't actually send data)
+                test_socket.connect(("8.8.8.8", 80))
+                local_ip = test_socket.getsockname()[0]
+                test_socket.close()
+                
+                # Validate that it's not a loopback address or VirtualBox
+                if (not local_ip.startswith('127.') and 
+                    not local_ip.startswith('192.168.56.') and  # VirtualBox Host-Only
+                    not local_ip.startswith('169.254.')):       # APIPA
+                    return local_ip
+            except:
+                test_socket.close()
+            
+            # Method 2: Use psutil to get network interfaces with better filtering
+            try:
+                import psutil
+                interfaces_with_gw = []
+                interfaces_without_gw = []
+                
+                # Get default gateways to identify primary interfaces
+                gateways = psutil.net_if_stats()
+                
+                for interface_name, interface_addresses in psutil.net_if_addrs().items():
+                    # Skip known virtual interfaces
+                    if any(skip in interface_name.lower() for skip in [
+                        'virtualbox', 'vmware', 'vbox', 'hyper-v', 'loopback', 
+                        'bluetooth', 'isatap', 'teredo', 'tunnel'
+                    ]):
+                        continue
+                    
+                    for address in interface_addresses:
+                        if address.family == socket.AF_INET:
+                            ip = address.address
+                            
+                            # Skip loopback, APIPA, and VirtualBox IPs
+                            if (ip.startswith('127.') or 
+                                ip.startswith('169.254.') or
+                                ip.startswith('192.168.56.')):  # VirtualBox Host-Only
+                                continue
+                            
+                            # Check if this interface is up and running
+                            try:
+                                interface_stats = psutil.net_if_stats().get(interface_name)
+                                if interface_stats and interface_stats.isup:
+                                    # Prefer Wi-Fi and Ethernet over other interfaces
+                                    if any(pref in interface_name.lower() for pref in ['wi-fi', 'wifi', 'ethernet', 'local area']):
+                                        interfaces_with_gw.append((ip, interface_name))
+                                    else:
+                                        interfaces_without_gw.append((ip, interface_name))
+                            except:
+                                pass
+                
+                # Return the best interface
+                if interfaces_with_gw:
+                    # Prefer Wi-Fi over Ethernet if both available
+                    for ip, name in interfaces_with_gw:
+                        if 'wi-fi' in name.lower() or 'wifi' in name.lower():
+                            return ip
+                    # Otherwise return first good interface
+                    return interfaces_with_gw[0][0]
+                
+                if interfaces_without_gw:
+                    return interfaces_without_gw[0][0]
+                    
+            except Exception as e:
+                if startup_logger:
+                    startup_logger.warning(f"Method 2 failed: {e}")
+            
+            # Method 3: Fallback to hostname resolution
+            try:
+                hostname = socket.gethostname()
+                local_ip = socket.gethostbyname(hostname)
+                if (not local_ip.startswith('127.') and 
+                    not local_ip.startswith('192.168.56.')):
+                    return local_ip
+            except:
+                pass
+            
+            # Method 4: Last resort - return localhost
+            return '127.0.0.1'
+            
+        except Exception as e:
+            if startup_logger:
+                startup_logger.error(f"Error getting local IP: {e}")
+            return '127.0.0.1'
     
     def start_server(self):
         """Start the TCP print server"""
@@ -431,14 +737,13 @@ class PrinterOneServer:
             self.server_socket.listen(5)
             self.running = True
             
-            self.log(f"🟢 Server started on port {port}")
-            self.log(f"🖨 Using printer: {printer_name}")
+            self.log(f"[OK] Server started on port {port}")
+            self.log(f"[PRINTER] Using printer: {printer_name}")
             
-            # Get local IP addresses
-            hostname = socket.gethostname()
-            local_ip = socket.gethostbyname(hostname)
-            self.log(f"🌐 Local IP: {local_ip}")
-            self.log(f"🔗 Other machines can connect to: {local_ip}:{port}")
+            # Get local IP addresses using improved method
+            local_ip = self.get_local_ip()
+            self.log(f"[IP] Local IP: {local_ip}")
+            self.log(f"[CONNECT] Other machines can connect to: {local_ip}:{port}")
             
             while SERVER_RUNNING and self.running:
                 try:
@@ -494,29 +799,29 @@ class TestClient:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(5)
             
-            log(f"🔌 Connecting to {host}:{port}...")
+            log(f"[CONNECT] Connecting to {host}:{port}...")
             client_socket.connect((host, port))
-            log(f"✔ Connected successfully!")
+            log(f"[OK] Connected successfully!")
             
             # Send test data if provided
             if test_data is not None:
-                log(f"📤 Sending {len(test_data)} bytes...")
+                log(f"[SEND] Sending {len(test_data)} bytes...")
                 client_socket.send(test_data)
-                log(f"✔ Data sent successfully!")
+                log(f"[OK] Data sent successfully!")
             else:
-                log(f"✔ Connection test only - no data sent")
+                log(f"[OK] Connection test only - no data sent")
             
             client_socket.close()
             return True
             
         except ConnectionRefusedError:
-            log(f"❌ Connection refused. Is the server running on {host}:{port}?")
+            log(f"[ERROR] Connection refused. Is the server running on {host}:{port}?")
             return False
         except socket.timeout:
-            log(f"❌ Connection timeout.")
+            log(f"[ERROR] Connection timeout.")
             return False
         except Exception as e:
-            log(f"❌ Error: {e}")
+            log(f"[ERROR] Error: {e}")
             return False
 
 class AutoStartManager:
@@ -525,20 +830,23 @@ class AutoStartManager:
     @staticmethod  
     def find_manager_exe():
         """Find PrinterOne Manager GUI executable"""
-        # Check for this script
-        current_script = os.path.abspath(__file__)
-        return [sys.executable, current_script, "gui"]
+        # Check if running from exe (PyInstaller)
+        if hasattr(sys, '_MEIPASS'):
+            # Running from exe - use sys.executable which points to exe
+            exe_path = os.path.abspath(sys.executable)
+            # For exe files, we need to include parameters as part of the command
+            return f'"{exe_path}" gui auto_start'
+        else:
+            # Running from Python script
+            current_script = os.path.abspath(__file__)
+            python_exe = os.path.abspath(sys.executable)
+            return f'"{python_exe}" "{current_script}" gui auto_start'
     
     @staticmethod
     def add_to_startup():
         """Add PrinterOne Manager to Windows startup"""
         try:
-            manager_path = AutoStartManager.find_manager_exe()
-            
-            if isinstance(manager_path, list):
-                registry_path = f'"{manager_path[0]}" "{manager_path[1]}" gui auto_start'
-            else:
-                registry_path = f'"{manager_path}" gui auto_start'
+            registry_path = AutoStartManager.find_manager_exe()
             
             # Add to Windows startup registry
             key = winreg.OpenKey(
@@ -601,57 +909,189 @@ class PrinterOneGUI:
     """Integrated GUI for PrinterOne"""
     
     def __init__(self, root):
-        self.root = root
-        self.root.title("PrinterOne - Network Print Server")
-        self.root.geometry("1200x700")
-        self.root.resizable(True, True)
+        # Setup GUI initialization logging
+        self.init_logger = None
+        try:
+            self.init_logger = logging.getLogger('gui_init')
+            if not self.init_logger.handlers:  # Avoid duplicate handlers
+                self.init_logger.setLevel(logging.INFO)
+                
+                # Create logs directory if it doesn't exist - use temp fallback if permission denied
+                logs_dir = "logs"
+                try:
+                    if not os.path.exists(logs_dir):
+                        os.makedirs(logs_dir)
+                except PermissionError:
+                    # Fallback to user temp directory if permission denied
+                    import tempfile
+                    logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+                    if not os.path.exists(logs_dir):
+                        os.makedirs(logs_dir, exist_ok=True)
+                
+                # Generate GUI initialization log filename
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                gui_init_log_filename = f"gui_init_{timestamp}.log"
+                gui_init_log_path = os.path.join(logs_dir, gui_init_log_filename)
+                
+                # Create file handler for GUI initialization log
+                file_handler = logging.FileHandler(gui_init_log_path, encoding='utf-8')
+                file_handler.setLevel(logging.INFO)
+                
+                # Create formatter
+                formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+                file_handler.setFormatter(formatter)
+                
+                # Add handler to logger
+                self.init_logger.addHandler(file_handler)
+        except Exception as e:
+            print(f"Error setting up GUI init logging: {e}")
+            self.init_logger = None
         
-        # Initialize server with log callback
-        self.server = PrinterOneServer(log_callback=self.log_message)
-        self.server_thread = None
-        
-        # GUI variables
-        self.printer_var = tk.StringVar(value=self.server.config.get("printer_name", ""))
-        self.port_var = tk.IntVar(value=self.server.config.get("port", 9100))
-        self.test_host_var = tk.StringVar(value="localhost")
-        self.test_port_var = tk.IntVar(value=9100)
-        
-        # System tray variables
-        self.tray_icon = None
-        self.minimize_to_tray = self.server.config.get("minimize_to_tray", True)
-        self.minimize_to_tray_var = tk.BooleanVar(value=self.minimize_to_tray)
-        
-        # Setup logging
-        self.logger = self.setup_logging()
-        
-        # Set window icon
-        self.set_window_icon()
-        
-        # Create GUI
-        self.create_widgets()
-        
-        # Update status
-        self.update_status()
-        
-        # Bind window events
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
-        # Start status update thread
-        self.start_status_thread()
-        
-        # Setup system tray
-        if TRAY_AVAILABLE:
-            self.setup_tray()
-        
-        # Auto-start server if configured
-        if AUTO_START_MODE:
-            self.root.after(2000, self.auto_start_server)
-        else:
-            # Auto-start server if printer is configured
-            printer_name = self.server.config.get("printer_name", "")
-            if printer_name and printer_name.strip():
-                self.log_message("Printer configured, auto-starting server...")
-                self.root.after(1000, self.auto_start_server)
+        try:
+            if self.init_logger:
+                self.init_logger.info("=== PrinterOneGUI Initialization Started ===")
+                self.init_logger.info(f"Tkinter root object: {root}")
+            
+            self.root = root
+            self.root.title("PrinterOne - Network Print Server")
+            self.root.geometry("1200x700")
+            self.root.resizable(True, True)
+            
+            if self.init_logger:
+                self.init_logger.info("Basic root window configuration completed")
+            
+            # Initialize server with log callback
+            if self.init_logger:
+                self.init_logger.info("Initializing PrinterOneServer...")
+            
+            self.server = PrinterOneServer(log_callback=self.log_message)
+            self.server_thread = None
+            
+            if self.init_logger:
+                self.init_logger.info("PrinterOneServer initialized successfully")
+            
+            # GUI variables
+            if self.init_logger:
+                self.init_logger.info("Setting up GUI variables...")
+            
+            self.printer_var = tk.StringVar(value=self.server.config.get("printer_name", ""))
+            self.port_var = tk.IntVar(value=self.server.config.get("port", 9100))
+            self.test_host_var = tk.StringVar(value="localhost")
+            self.test_port_var = tk.IntVar(value=9100)
+            
+            # System tray variables
+            self.tray_icon = None
+            self.minimize_to_tray = self.server.config.get("minimize_to_tray", True)
+            self.minimize_to_tray_var = tk.BooleanVar(value=self.minimize_to_tray)
+            
+            if self.init_logger:
+                self.init_logger.info("GUI variables setup completed")
+            
+            # Setup logging
+            if self.init_logger:
+                self.init_logger.info("Setting up application logging...")
+            
+            self.logger = self.setup_logging()
+            
+            if self.init_logger:
+                self.init_logger.info("Application logging setup completed")
+            
+            # Set window icon
+            if self.init_logger:
+                self.init_logger.info("Setting window icon...")
+            
+            self.set_window_icon()
+            
+            if self.init_logger:
+                self.init_logger.info("Window icon setup completed")
+            
+            # Create GUI
+            if self.init_logger:
+                self.init_logger.info("Creating GUI widgets...")
+            
+            self.create_widgets()
+            
+            if self.init_logger:
+                self.init_logger.info("GUI widgets creation completed")
+            
+            # Update status
+            if self.init_logger:
+                self.init_logger.info("Updating initial status...")
+            
+            self.update_status()
+            
+            if self.init_logger:
+                self.init_logger.info("Initial status update completed")
+            
+            # Bind window events
+            if self.init_logger:
+                self.init_logger.info("Binding window events...")
+            
+            self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+            
+            if self.init_logger:
+                self.init_logger.info("Window events binding completed")
+            
+            # Start status update thread
+            if self.init_logger:
+                self.init_logger.info("Starting status update thread...")
+            
+            self.start_status_thread()
+            
+            if self.init_logger:
+                self.init_logger.info("Status update thread started")
+            
+            # Setup system tray
+            if self.init_logger:
+                self.init_logger.info(f"Setting up system tray (TRAY_AVAILABLE: {TRAY_AVAILABLE})...")
+            
+            if TRAY_AVAILABLE:
+                self.setup_tray()
+                if self.init_logger:
+                    self.init_logger.info("System tray setup completed")
+            else:
+                if self.init_logger:
+                    self.init_logger.info("System tray not available, skipping")
+            
+            # Auto-start server if configured
+            if self.init_logger:
+                self.init_logger.info(f"Checking auto-start configuration (AUTO_START_MODE: {AUTO_START_MODE})...")
+            
+            if AUTO_START_MODE:
+                if self.init_logger:
+                    self.init_logger.info("Auto-start mode detected, hiding window to system tray")
+                # Hide window to system tray in auto-start mode
+                if TRAY_AVAILABLE:
+                    self.root.after(100, self.hide_window)
+                if self.init_logger:
+                    self.init_logger.info("Scheduling server start in 2 seconds")
+                self.root.after(2000, self.auto_start_server)
+            else:
+                # Auto-start server if printer is configured
+                printer_name = self.server.config.get("printer_name", "")
+                if printer_name and printer_name.strip():
+                    if self.init_logger:
+                        self.init_logger.info(f"Printer configured ({printer_name}), scheduling auto-start in 1 second")
+                    self.log_message("Printer configured, auto-starting server...")
+                    self.root.after(1000, self.auto_start_server)
+                else:
+                    if self.init_logger:
+                        self.init_logger.info("No printer configured, server will not auto-start")
+            
+            if self.init_logger:
+                self.init_logger.info("=== PrinterOneGUI Initialization Completed Successfully ===")
+                
+        except Exception as e:
+            error_msg = f"Error during GUI initialization: {e}"
+            print(error_msg)
+            if self.init_logger:
+                self.init_logger.critical(error_msg)
+                self.init_logger.critical(f"Exception type: {type(e).__name__}")
+                import traceback
+                self.init_logger.critical(f"Traceback: {traceback.format_exc()}")
+            
+            # Re-raise to maintain original behavior
+            raise
     
     def get_resource_path(self, filename):
         """Get absolute path to resource"""
@@ -725,7 +1165,7 @@ class PrinterOneGUI:
         control_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(5, 0))
         
         # Server status
-        self.server_status_label = ttk.Label(control_frame, text="🔴 Server Stopped", 
+        self.server_status_label = ttk.Label(control_frame, text="[STOP] Server Stopped", 
                                            font=("Arial", 12, "bold"))
         self.server_status_label.pack(pady=10)
         
@@ -908,13 +1348,13 @@ Includes a GUI management interface and test client with PDF conversion for test
         port = self.port_var.get()
         
         if not printer_name:
-            self.log_message("⚠ Please select a printer first!")
+            self.log_message("[WARN] Please select a printer first!")
             return
         
         if self.server.save_config(printer_name=printer_name, port=port):
-            self.log_message("✓ Configuration saved successfully!")
+            self.log_message("[OK] Configuration saved successfully!")
         else:
-            self.log_message("✗ Failed to save configuration!")
+            self.log_message("[ERROR] Failed to save configuration!")
         
         # Update port in test client if not manually changed
         if self.test_port_var.get() == 9100 or self.test_port_var.get() == self.server.config.get("port", 9100):
@@ -923,25 +1363,25 @@ Includes a GUI management interface and test client with PDF conversion for test
     def start_server(self):
         """Start the print server"""
         if self.server_thread and self.server_thread.is_alive():
-            self.log_message("⚠ Server is already running!")
+            self.log_message("[WARN] Server is already running!")
             return
         
         printer_name = self.printer_var.get()
         port = self.port_var.get()
         
         if not printer_name:
-            self.log_message("⚠ Please select a printer first!")
+            self.log_message("[WARN] Please select a printer first!")
             return
         
         # Save current configuration
         if self.server.save_config(printer_name=printer_name, port=port):
-            self.log_message("✓ Configuration saved")
+            self.log_message("[OK] Configuration saved")
         
         # Start server in separate thread
         self.server_thread = threading.Thread(target=self.server.start_server, daemon=True)
         self.server_thread.start()
         
-        self.log_message("🚀 Starting server...")
+        self.log_message("[START] Starting server...")
         self.update_server_status()
         
         # Give server time to start
@@ -950,7 +1390,7 @@ Includes a GUI management interface and test client with PDF conversion for test
     def stop_server(self):
         """Stop the print server"""
         self.server.stop_server()
-        self.log_message("🛑 Server stopped")
+        self.log_message("[STOP] Server stopped")
         self.update_server_status()
     
     def auto_start_server(self):
@@ -960,20 +1400,20 @@ Includes a GUI management interface and test client with PDF conversion for test
             
             if not printer_name or not printer_name.strip():
                 if AUTO_START_MODE:
-                    self.log_message("⚠ Auto-start mode: No printer configured, skipping auto-start")
+                    self.log_message("[WARN] Auto-start mode: No printer configured, running in system tray")
                 else:
-                    self.log_message("ℹ No printer configured, server not started")
+                    self.log_message("[INFO] No printer configured, server not started")
                 return
             
             if AUTO_START_MODE:
-                self.log_message("🔄 Auto-start mode detected, starting server...")
+                self.log_message("[AUTO] Auto-start mode: Starting server in background, check system tray...")
             else:
-                self.log_message("🔄 Auto-starting server with configured printer...")
+                self.log_message("[AUTO] Auto-starting server with configured printer...")
             
             # Start server automatically
             self.start_server()
         except Exception as e:
-            self.log_message(f"✗ Error in auto-start: {e}")
+            self.log_message(f"[ERROR] Error in auto-start: {e}")
     
     def update_status(self):
         """Update all status displays"""
@@ -983,21 +1423,20 @@ Includes a GUI management interface and test client with PDF conversion for test
     def update_server_status(self):
         """Update server status display"""
         if self.server.running:
-            self.server_status_label.config(text="🟢 Server Running", foreground="green")
+            self.server_status_label.config(text="[OK] Server Running", foreground="green")
             self.start_button.config(state="disabled")
             self.stop_button.config(state="normal")
             
             port = self.server.config.get("port", 9100)
             try:
-                hostname = socket.gethostname()
-                local_ip = socket.gethostbyname(hostname)
+                local_ip = self.server.get_local_ip()
                 info_text = f"Port: {port} | IP: {local_ip}"
             except:
                 info_text = f"Port: {port}"
             
             self.server_info_label.config(text=info_text)
         else:
-            self.server_status_label.config(text="🔴 Server Stopped", foreground="red")
+            self.server_status_label.config(text="[STOP] Server Stopped", foreground="red")
             self.start_button.config(state="normal")
             self.stop_button.config(state="disabled")
             self.server_info_label.config(text="")
@@ -1007,11 +1446,11 @@ Includes a GUI management interface and test client with PDF conversion for test
         is_in_startup, path_or_error = AutoStartManager.check_startup_status()
         
         if is_in_startup:
-            self.autostart_status_label.config(text="✅ Auto-start enabled", foreground="green")
+            self.autostart_status_label.config(text="[OK] Auto-start enabled", foreground="green")
             self.add_autostart_button.config(state="disabled")
             self.remove_autostart_button.config(state="normal")
         else:
-            self.autostart_status_label.config(text="❌ Auto-start disabled", foreground="red")
+            self.autostart_status_label.config(text="[STOP] Auto-start disabled", foreground="red")
             self.add_autostart_button.config(state="normal")
             self.remove_autostart_button.config(state="disabled")
     
@@ -1019,18 +1458,18 @@ Includes a GUI management interface and test client with PDF conversion for test
         """Add to Windows startup"""
         success, message = AutoStartManager.add_to_startup()
         if success:
-            self.log_message(f"✓ {message}")
+            self.log_message(f"[OK] {message}")
         else:
-            self.log_message(f"✗ {message}")
+            self.log_message(f"[ERROR] {message}")
         self.update_autostart_status()
     
     def remove_from_startup(self):
         """Remove from Windows startup"""
         success, message = AutoStartManager.remove_from_startup()
         if success:
-            self.log_message(f"✓ {message}")
+            self.log_message(f"[OK] {message}")
         else:
-            self.log_message(f"✗ {message}")
+            self.log_message(f"[ERROR] {message}")
         self.update_autostart_status()
     
     def test_connection(self):
@@ -1038,15 +1477,15 @@ Includes a GUI management interface and test client with PDF conversion for test
         host = self.test_host_var.get()
         port = self.test_port_var.get()
         
-        self.log_test_message(f"🔌 Testing connection to {host}:{port}...")
+        self.log_test_message(f"[CONNECT] Testing connection to {host}:{port}...")
         
         def run_test():
             # Only test connection, don't send any data
             success = TestClient.test_connection(host, port, test_data=None, log_callback=self.log_test_message)
             if success:
-                self.root.after(0, lambda: self.log_test_message("✓ Connection test completed!"))
+                self.root.after(0, lambda: self.log_test_message("[OK] Connection test completed!"))
             else:
-                self.root.after(0, lambda: self.log_test_message("✗ Connection test failed!"))
+                self.root.after(0, lambda: self.log_test_message("[ERROR] Connection test failed!"))
         
         threading.Thread(target=run_test, daemon=True).start()
     
@@ -1077,25 +1516,25 @@ If you can see this printed output, the PrinterOne server is working correctly!
         use_pdf_conversion = self.server.config.get("use_pdf_conversion", True)
         
         if printer_name == "Microsoft Print to PDF" and use_pdf_conversion:
-            self.log_test_message(f"📄 Converting test data to PDF for PDF printer...")
+            self.log_test_message(f"[PDF] Converting test data to PDF for PDF printer...")
             try:
                 pdf_data = self.server.convert_raw_to_pdf(test_data, save_file=False)
                 if pdf_data:
                     test_data = pdf_data
-                    self.log_test_message(f"✓ Test data converted to PDF ({len(test_data)} bytes)")
+                    self.log_test_message(f"[OK] Test data converted to PDF ({len(test_data)} bytes)")
                 else:
-                    self.log_test_message("⚠ PDF conversion failed, using raw data")
+                    self.log_test_message("[WARN] PDF conversion failed, using raw data")
             except Exception as e:
-                self.log_test_message(f"⚠ PDF conversion error: {e}")
+                self.log_test_message(f"[WARN] PDF conversion error: {e}")
         
-        self.log_test_message(f"📤 Sending test data to {host}:{port} ({len(test_data)} bytes)")
+        self.log_test_message(f"[SEND] Sending test data to {host}:{port} ({len(test_data)} bytes)")
         
         def run_test():
             success = TestClient.test_connection(host, port, test_data, log_callback=self.log_test_message)
             if success:
-                self.root.after(0, lambda: self.log_test_message("✓ Test data sent successfully!"))
+                self.root.after(0, lambda: self.log_test_message("[OK] Test data sent successfully!"))
             else:
-                self.root.after(0, lambda: self.log_test_message("✗ Failed to send test data!"))
+                self.root.after(0, lambda: self.log_test_message("[ERROR] Failed to send test data!"))
         
         threading.Thread(target=run_test, daemon=True).start()
     
@@ -1128,11 +1567,11 @@ If you can see this printed output, the PrinterOne server is working correctly!
     def quit_app(self):
         """Quit the application"""
         try:
-            self.log_message("👋 Shutting down...")
+            self.log_message("[BYE] Shutting down...")
             
             # Stop server
             if self.server.running:
-                self.log_message("🛑 Stopping server...")
+                self.log_message("[STOP] Stopping server...")
                 self.server.stop_server()
                 time.sleep(1)
             
@@ -1140,11 +1579,11 @@ If you can see this printed output, the PrinterOne server is working correctly!
             if TRAY_AVAILABLE and self.tray_icon:
                 try:
                     self.tray_icon.stop()
-                    self.log_message("🔸 Tray icon stopped")
+                    self.log_message("[TRAY] Tray icon stopped")
                 except:
                     pass
             
-            self.log_message("✓ Application closed")
+            self.log_message("[OK] Application closed")
             self.root.quit()
             self.root.destroy()
             sys.exit(0)
@@ -1217,10 +1656,17 @@ If you can see this printed output, the PrinterOne server is working correctly!
     
     def setup_logging(self):
         """Setup logging system"""
-        # Create logs directory
+        # Create logs directory - use temp fallback if permission denied
         logs_dir = "logs"
-        if not os.path.exists(logs_dir):
-            os.makedirs(logs_dir)
+        try:
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir)
+        except PermissionError:
+            # Fallback to user temp directory if permission denied
+            import tempfile
+            logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir, exist_ok=True)
         
         # Clean old logs
         self.cleanup_old_logs(logs_dir)
@@ -1326,48 +1772,146 @@ def run_gui_mode():
     """Run in GUI mode"""
     global AUTO_START_MODE
     
-    # Check if this is an auto-start instance
-    AUTO_START_MODE = 'auto_start' in sys.argv
-    
-    # Kill existing GUI instances
-    killed_count = 0
+    # Setup GUI startup logging
+    gui_logger = None
     try:
-        current_pid = os.getpid()
-        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        gui_logger = logging.getLogger('gui_startup')
+        if not gui_logger.handlers:  # Avoid duplicate handlers
+            gui_logger.setLevel(logging.INFO)
+            
+            # Create logs directory if it doesn't exist - use temp fallback if permission denied
+            logs_dir = "logs"
             try:
-                if proc.info['pid'] == current_pid:
-                    continue
-                
-                process_name = proc.info['name'].lower()
-                cmdline = ' '.join(proc.info['cmdline']) if proc.info['cmdline'] else ''
-                
-                # Kill other GUI instances
-                if ((process_name == 'python.exe' and 'server.py' in cmdline and 'gui' in cmdline) or
-                    process_name == 'printeronemanager.exe'):
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=3)
-                    except psutil.TimeoutExpired:
-                        proc.kill()
-                    killed_count += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+                if not os.path.exists(logs_dir):
+                    os.makedirs(logs_dir)
+            except PermissionError:
+                # Fallback to user temp directory if permission denied
+                import tempfile
+                logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+                if not os.path.exists(logs_dir):
+                    os.makedirs(logs_dir, exist_ok=True)
+            
+            # Generate GUI startup log filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            gui_startup_log_filename = f"gui_startup_{timestamp}.log"
+            gui_startup_log_path = os.path.join(logs_dir, gui_startup_log_filename)
+            
+            # Create file handler for GUI startup log
+            file_handler = logging.FileHandler(gui_startup_log_path, encoding='utf-8')
+            file_handler.setLevel(logging.INFO)
+            
+            # Create formatter
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            
+            # Add handler to logger
+            gui_logger.addHandler(file_handler)
     except Exception as e:
-        print(f"Error killing existing instances: {e}")
+        print(f"Error setting up GUI startup logging: {e}")
+        gui_logger = None
     
-    if killed_count > 0:
-        print(f"Killed {killed_count} existing GUI instance(s)")
-        time.sleep(1)
-    
-    # Create and run GUI
-    root = tk.Tk()
     try:
-        app = PrinterOneGUI(root)
-        root.mainloop()
+        if gui_logger:
+            gui_logger.info("=== GUI Mode Starting ===")
+            gui_logger.info(f"Process ID: {os.getpid()}")
+            gui_logger.info(f"Arguments: {sys.argv}")
+        
+        # Check if this is an auto-start instance (works for both script and exe)
+        AUTO_START_MODE = 'auto_start' in sys.argv
+        
+        if gui_logger:
+            gui_logger.info(f"Auto-start mode: {AUTO_START_MODE}")
+        
+        # Kill existing GUI instances
+        killed_count = 0
+        try:
+            if gui_logger:
+                gui_logger.info("Checking for existing GUI instances...")
+            
+            current_pid = os.getpid()
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['pid'] == current_pid:
+                        continue
+                    
+                    process_name = proc.info['name'].lower()
+                    cmdline = ' '.join(proc.info['cmdline']) if proc.info['cmdline'] else ''
+                    
+                    # Kill other GUI instances
+                    if ((process_name == 'python.exe' and 'server.py' in cmdline and 'gui' in cmdline) or
+                        process_name == 'printerone.exe'):
+                        if gui_logger:
+                            gui_logger.info(f"Killing existing instance: {process_name} (PID: {proc.info['pid']})")
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            proc.kill()
+                        killed_count += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except Exception as e:
+            error_msg = f"Error killing existing instances: {e}"
+            print(error_msg)
+            if gui_logger:
+                gui_logger.error(error_msg)
+        
+        if killed_count > 0:
+            info_msg = f"Killed {killed_count} existing GUI instance(s)"
+            print(info_msg)
+            if gui_logger:
+                gui_logger.info(info_msg)
+            time.sleep(1)
+        elif gui_logger:
+            gui_logger.info("No existing GUI instances found")
+        
+        # Create and run GUI
+        if gui_logger:
+            gui_logger.info("Creating Tkinter root window...")
+        
+        root = tk.Tk()
+        
+        if gui_logger:
+            gui_logger.info("Tkinter root window created successfully")
+            gui_logger.info("Initializing PrinterOneGUI...")
+        
+        try:
+            app = PrinterOneGUI(root)
+            if gui_logger:
+                gui_logger.info("PrinterOneGUI initialized successfully")
+                gui_logger.info("Starting Tkinter mainloop...")
+            
+            root.mainloop()
+            
+            if gui_logger:
+                gui_logger.info("Tkinter mainloop completed normally")
+                
+        except Exception as e:
+            error_msg = f"GUI error: {e}"
+            print(error_msg)
+            if gui_logger:
+                gui_logger.critical(error_msg)
+                gui_logger.critical(f"Exception type: {type(e).__name__}")
+                import traceback
+                gui_logger.critical(f"Traceback: {traceback.format_exc()}")
+            
+            import traceback
+            traceback.print_exc()
+            
+            # Re-raise for proper error handling
+            raise
+            
     except Exception as e:
-        print(f"GUI error: {e}")
-        import traceback
-        traceback.print_exc()
+        error_msg = f"Critical GUI startup error: {e}"
+        print(error_msg)
+        if gui_logger:
+            gui_logger.critical(error_msg)
+            gui_logger.critical(f"Exception type: {type(e).__name__}")
+            import traceback
+            gui_logger.critical(f"Traceback: {traceback.format_exc()}")
+        
+        # Re-raise the exception to maintain original behavior
+        raise
 
 def run_test_mode():
     """Run test client"""
@@ -1406,28 +1950,149 @@ def show_help():
     print("Copyright (c) 2025 xtieume@gmail.com")
     print("GitHub: https://github.com/xtieume/PrinterOne")
 
+def setup_startup_logging():
+    """Setup startup logging to track OS calls and initialization failures"""
+    try:
+        # Create logs directory if it doesn't exist - use temp fallback if permission denied
+        logs_dir = "logs"
+        try:
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir)
+        except PermissionError:
+            # Fallback to user temp directory if permission denied
+            import tempfile
+            logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir, exist_ok=True)
+        
+        # Generate startup log filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        startup_log_filename = f"startup_{timestamp}.log"
+        startup_log_path = os.path.join(logs_dir, startup_log_filename)
+        
+        # Setup startup logger
+        startup_logger = logging.getLogger('startup')
+        startup_logger.setLevel(logging.INFO)
+        
+        # Create file handler for startup log
+        file_handler = logging.FileHandler(startup_log_path, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        
+        # Add handler to logger
+        startup_logger.addHandler(file_handler)
+        
+        return startup_logger
+    except Exception as e:
+        print(f"Error setting up startup logging: {e}")
+        return None
+
 def main():
     """Main function"""
-    if len(sys.argv) > 1:
-        command = sys.argv[1].lower()
+    # Setup startup logging first
+    startup_logger = setup_startup_logging()
+    
+    try:
+        if startup_logger:
+            startup_logger.info("=== PrinterOne Application Started ===")
+            startup_logger.info(f"Python version: {sys.version}")
+            startup_logger.info(f"Command line arguments: {sys.argv}")
+            startup_logger.info(f"Working directory: {os.getcwd()}")
+            startup_logger.info(f"Executable path: {sys.executable}")
+            
+            # Log if running from exe
+            if hasattr(sys, '_MEIPASS'):
+                startup_logger.info(f"Running from PyInstaller exe: {sys.executable}")
+                startup_logger.info(f"Bundle dir: {sys._MEIPASS}")
+            else:
+                startup_logger.info("Running from Python script")
         
-        if command in ['--help', '-h', 'help']:
-            show_help()
-        elif command == 'gui':
-            run_gui_mode()
-        elif command == 'test':
-            run_test_mode()
+        if len(sys.argv) > 1:
+            command = sys.argv[1].lower()
+            
+            if startup_logger:
+                startup_logger.info(f"Command mode: {command}")
+            
+            if command in ['--help', '-h', 'help']:
+                if startup_logger:
+                    startup_logger.info("Showing help")
+                show_help()
+            elif command == 'gui':
+                if startup_logger:
+                    startup_logger.info("Starting GUI mode")
+                run_gui_mode()
+            elif command == 'test':
+                if startup_logger:
+                    startup_logger.info("Starting test mode")
+                run_test_mode()
+            else:
+                if startup_logger:
+                    startup_logger.error(f"Unknown command: {command}")
+                print(f"Unknown command: {command}")
+                show_help()
         else:
-            print(f"Unknown command: {command}")
-            show_help()
-    else:
-        # Default to GUI mode if available, otherwise console
-        try:
-            run_gui_mode()
-        except ImportError as e:
-            print(f"GUI dependencies not available: {e}")
-            print("Running in console mode...")
-            run_console_mode()
+            if startup_logger:
+                startup_logger.info("Default mode - attempting GUI")
+            # Default to GUI mode if available, otherwise console
+            try:
+                run_gui_mode()
+            except ImportError as e:
+                if startup_logger:
+                    startup_logger.error(f"GUI dependencies not available: {e}")
+                    startup_logger.info("Falling back to console mode")
+                print(f"GUI dependencies not available: {e}")
+                print("Running in console mode...")
+                run_console_mode()
+        
+        if startup_logger:
+            startup_logger.info("Application completed successfully")
+            
+    except Exception as e:
+        error_msg = f"Critical startup error: {e}"
+        print(error_msg)
+        if startup_logger:
+            startup_logger.critical(error_msg)
+            startup_logger.critical(f"Exception type: {type(e).__name__}")
+            import traceback
+            startup_logger.critical(f"Traceback: {traceback.format_exc()}")
+        
+        # Re-raise the exception to maintain original behavior
+        raise
 
 if __name__ == "__main__":
-    main()
+    try:
+        if startup_logger:
+            startup_logger.info("=== Main execution started ===")
+            startup_logger.info(f"OS called application: {sys.executable}")
+            startup_logger.info(f"Arguments passed: {sys.argv}")
+            startup_logger.info(f"Environment: {dict(os.environ)}")
+        
+        main()
+        
+        if startup_logger:
+            startup_logger.info("=== Main execution completed successfully ===")
+            
+    except Exception as e:
+        error_msg = f"CRITICAL APPLICATION FAILURE: {e}"
+        print(error_msg)
+        
+        if startup_logger:
+            startup_logger.critical("=== CRITICAL APPLICATION FAILURE ===")
+            startup_logger.critical(error_msg)
+            startup_logger.critical(f"Exception type: {type(e).__name__}")
+            startup_logger.critical(f"Full traceback: {traceback.format_exc()}")
+            startup_logger.critical("=== END OF CRITICAL FAILURE LOG ===")
+        else:
+            print(f"Exception type: {type(e).__name__}")
+            print(f"Full traceback: {traceback.format_exc()}")
+        
+        # Keep console open for debugging
+        try:
+            input("Press Enter to exit...")
+        except:
+            pass
+            
+        sys.exit(1)
