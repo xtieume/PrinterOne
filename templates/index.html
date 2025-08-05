@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrinterOne - Web Print Interface</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+        
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 800px;
+        }
+        
+        .drop-zone {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 60px 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f8f9ff;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .drop-zone:hover {
+            border-color: #5a67d8;
+            background: #f0f2ff;
+            transform: translateY(-2px);
+        }
+        
+        .drop-zone.dragover {
+            border-color: #4c51bf;
+            background: #e6fffa;
+            border-style: solid;
+            transform: scale(1.02);
+        }
+        
+        .drop-zone-icon {
+            font-size: 4rem;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+        
+        .drop-zone h3 {
+            font-size: 1.5rem;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        
+        .drop-zone p {
+            color: #718096;
+            font-size: 1rem;
+            margin-bottom: 20px;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .select-button {
+            background: #667eea;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .select-button:hover {
+            background: #5a67d8;
+        }
+        
+        .file-list {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px;
+            background: #f7fafc;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .file-info {
+            display: flex;
+            align-items: center;
+        }
+        
+        .file-icon {
+            font-size: 1.5rem;
+            margin-right: 15px;
+            color: #667eea;
+        }
+        
+        .file-name {
+            font-weight: 500;
+            color: #2d3748;
+        }
+        
+        .file-size {
+            color: #718096;
+            font-size: 0.9rem;
+            margin-left: 10px;
+        }
+        
+        .file-status {
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .status-uploading {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-printing {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #e2e8f0;
+            border-radius: 2px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: #667eea;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        
+        .server-info {
+            background: #f0f8ff;
+            border: 1px solid #bee3f8;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .server-info h4 {
+            color: #2b6cb0;
+            margin-bottom: 10px;
+        }
+        
+        .server-info p {
+            color: #2c5282;
+            font-size: 0.9rem;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .drop-zone {
+                padding: 40px 20px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🖨️ PrinterOne</h1>
+        <p>Web Print Interface - Drop files to print instantly</p>
+    </div>
+    
+    <div class="container">
+        <div class="server-info">
+            <h4>🌐 Server Status</h4>
+            <p>Connected to printer: <strong>{{ printer_name }}</strong></p>
+            <p>Server: {{ server_ip }}:{{ server_port }}</p>
+        </div>
+        
+        <div class="drop-zone" id="dropZone">
+            <div class="drop-zone-icon">📁</div>
+            <h3>Drop files here to print</h3>
+            <p>Or click to select files manually</p>
+            <button class="select-button" onclick="document.getElementById('fileInput').click()">
+                Select Files
+            </button>
+            <input type="file" id="fileInput" class="file-input" multiple 
+                   accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.bmp,.gif">
+        </div>
+        
+        <div class="file-list hidden" id="fileList">
+            <h4>Print Queue</h4>
+            <div id="fileItems"></div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const fileItems = document.getElementById('fileItems');
+        let fileQueue = [];
+
+        // Drag and drop events
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = Array.from(e.dataTransfer.files);
+            handleFiles(files);
+        });
+
+        // File input change
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            handleFiles(files);
+        });
+
+        // Handle files
+        function handleFiles(files) {
+            if (files.length === 0) return;
+            
+            fileList.classList.remove('hidden');
+            
+            files.forEach(file => {
+                const fileId = Date.now() + Math.random();
+                const fileItem = {
+                    id: fileId,
+                    file: file,
+                    status: 'uploading'
+                };
+                
+                fileQueue.push(fileItem);
+                addFileToUI(fileItem);
+                uploadAndPrint(fileItem);
+            });
+        }
+
+        // Add file to UI
+        function addFileToUI(fileItem) {
+            const fileDiv = document.createElement('div');
+            fileDiv.className = 'file-item';
+            fileDiv.id = `file-${fileItem.id}`;
+            
+            const fileIcon = getFileIcon(fileItem.file.name);
+            const fileSize = formatFileSize(fileItem.file.size);
+            
+            fileDiv.innerHTML = `
+                <div class="file-info">
+                    <div class="file-icon">${fileIcon}</div>
+                    <div>
+                        <div class="file-name">${fileItem.file.name}</div>
+                        <div class="file-size">${fileSize}</div>
+                    </div>
+                </div>
+                <div class="file-status status-uploading">Uploading...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-${fileItem.id}"></div>
+                </div>
+            `;
+            
+            fileItems.appendChild(fileDiv);
+        }
+
+        // Upload and print file
+        async function uploadAndPrint(fileItem) {
+            try {
+                const formData = new FormData();
+                formData.append('file', fileItem.file);
+                
+                updateFileStatus(fileItem.id, 'uploading', 'Uploading...', 0);
+                
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    updateFileStatus(fileItem.id, 'printing', 'Printing...', 50);
+                    
+                    // Simulate printing progress
+                    setTimeout(() => {
+                        updateFileStatus(fileItem.id, 'completed', 'Printed ✓', 100);
+                    }, 2000);
+                } else {
+                    const error = await response.text();
+                    updateFileStatus(fileItem.id, 'error', `Error: ${error}`, 0);
+                }
+            } catch (error) {
+                updateFileStatus(fileItem.id, 'error', `Error: ${error.message}`, 0);
+            }
+        }
+
+        // Update file status
+        function updateFileStatus(fileId, status, message, progress) {
+            const fileDiv = document.getElementById(`file-${fileId}`);
+            const statusDiv = fileDiv.querySelector('.file-status');
+            const progressFill = document.getElementById(`progress-${fileId}`);
+            
+            statusDiv.className = `file-status status-${status}`;
+            statusDiv.textContent = message;
+            progressFill.style.width = `${progress}%`;
+        }
+
+        // Get file icon
+        function getFileIcon(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const icons = {
+                'pdf': '📄',
+                'doc': '📝',
+                'docx': '📝',
+                'txt': '📄',
+                'jpg': '🖼️',
+                'jpeg': '🖼️',
+                'png': '🖼️',
+                'bmp': '🖼️',
+                'gif': '🖼️'
+            };
+            return icons[ext] || '📄';
+        }
+
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Auto-refresh page every 30 seconds to check server status
+        setInterval(() => {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.server_running) {
+                        location.reload();
+                    }
+                })
+                .catch(() => {
+                    // Server might be down, reload page
+                    location.reload();
+                });
+        }, 30000);
+    </script>
+</body>
+</html>

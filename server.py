@@ -134,6 +134,15 @@ except ImportError:
     TRAY_AVAILABLE = False
     print("pystray not available, system tray disabled")
 
+# Flask web server imports
+try:
+    from flask import Flask, render_template, request, jsonify, redirect, url_for
+    from werkzeug.utils import secure_filename
+    FLASK_AVAILABLE = True
+except ImportError:
+    FLASK_AVAILABLE = False
+    print("Flask not available, web interface disabled")
+
 # Global variables
 SERVER_RUNNING = True
 AUTO_START_MODE = False
@@ -784,6 +793,135 @@ class PrinterOneServer:
         
         self.log("[DONE] Server stopped")
 
+class WebServer:
+    """Flask web server for web interface"""
+    
+    def __init__(self, printer_server, log_callback=None):
+        self.printer_server = printer_server
+        self.log_callback = log_callback
+        self.app = None
+        self.web_thread = None
+        self.running = False
+        
+        if FLASK_AVAILABLE:
+            self.setup_flask_app()
+    
+    def log(self, message):
+        """Log message"""
+        print(message)
+        if self.log_callback:
+            self.log_callback(message)
+    
+    def setup_flask_app(self):
+        """Setup Flask application"""
+        self.app = Flask(__name__)
+        self.app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+        
+        @self.app.route('/')
+        def index():
+            """Main web interface"""
+            printer_name = self.printer_server.config.get("printer_name", "Not configured")
+            server_ip = self.printer_server.get_local_ip()
+            server_port = self.printer_server.config.get("port", 9100)
+            
+            return render_template('index.html', 
+                                 printer_name=printer_name,
+                                 server_ip=server_ip,
+                                 server_port=server_port)
+        
+        @self.app.route('/upload', methods=['POST'])
+        def upload_file():
+            """Handle file upload and print"""
+            try:
+                if 'file' not in request.files:
+                    return jsonify({'error': 'No file provided'}), 400
+                
+                file = request.files['file']
+                if file.filename == '':
+                    return jsonify({'error': 'No file selected'}), 400
+                
+                filename = secure_filename(file.filename)
+                self.log(f"[WEB] Received file: {filename} ({file.content_length} bytes)")
+                
+                # Read file data
+                file_data = file.read()
+                
+                # Check if we need to convert to PDF for PDF printers
+                printer_name = self.printer_server.config.get("printer_name", "")
+                use_pdf_conversion = self.printer_server.config.get("use_pdf_conversion", True)
+                
+                if printer_name == "Microsoft Print to PDF" and use_pdf_conversion:
+                    self.log(f"[WEB] Converting {filename} to PDF for PDF printer...")
+                    try:
+                        # For text files, convert to PDF
+                        if filename.lower().endswith(('.txt', '.log')):
+                            pdf_data = self.printer_server.convert_raw_to_pdf(file_data, save_file=False)
+                            if pdf_data:
+                                file_data = pdf_data
+                                self.log(f"[WEB] File converted to PDF ({len(file_data)} bytes)")
+                            else:
+                                self.log("[WEB] PDF conversion failed, using raw data")
+                    except Exception as e:
+                        self.log(f"[WEB] PDF conversion error: {e}")
+                
+                # Print the file
+                success = self.printer_server.print_raw(file_data, printer_name)
+                
+                if success:
+                    self.log(f"[WEB] Successfully printed {filename}")
+                    return jsonify({'message': f'File {filename} sent to printer successfully'})
+                else:
+                    self.log(f"[WEB] Failed to print {filename}")
+                    return jsonify({'error': 'Failed to send file to printer'}), 500
+                    
+            except Exception as e:
+                error_msg = f"Error processing file: {e}"
+                self.log(f"[WEB] {error_msg}")
+                return jsonify({'error': error_msg}), 500
+        
+        @self.app.route('/status')
+        def status():
+            """Get server status"""
+            return jsonify({
+                'server_running': self.printer_server.running,
+                'printer_name': self.printer_server.config.get("printer_name", ""),
+                'port': self.printer_server.config.get("port", 9100)
+            })
+        
+        @self.app.errorhandler(413)
+        def too_large(e):
+            return jsonify({'error': 'File too large (max 100MB)'}), 413
+    
+    def start_web_server(self, host='0.0.0.0', port=8080):
+        """Start web server"""
+        if not FLASK_AVAILABLE:
+            self.log("[WEB] Flask not available, web server disabled")
+            return False
+        
+        if not self.app:
+            self.log("[WEB] Flask app not initialized")
+            return False
+        
+        try:
+            self.running = True
+            self.log(f"[WEB] Starting web server on {host}:{port}")
+            
+            # Run Flask app in debug mode disabled for production
+            self.app.run(host=host, port=port, debug=False, threaded=True)
+            
+        except Exception as e:
+            self.log(f"[WEB] Web server error: {e}")
+            return False
+        finally:
+            self.running = False
+        
+        return True
+    
+    def stop_web_server(self):
+        """Stop web server"""
+        self.running = False
+        self.log("[WEB] Web server stopped")
+
 class TestClient:
     """Test client for the print server"""
     
@@ -967,8 +1105,12 @@ class PrinterOneGUI:
             self.server = PrinterOneServer(log_callback=self.log_message)
             self.server_thread = None
             
+            # Initialize web server
+            self.web_server = WebServer(self.server, log_callback=self.log_message)
+            self.web_thread = None
+            
             if self.init_logger:
-                self.init_logger.info("PrinterOneServer initialized successfully")
+                self.init_logger.info("PrinterOneServer and WebServer initialized successfully")
             
             # GUI variables
             if self.init_logger:
@@ -1130,6 +1272,11 @@ class PrinterOneGUI:
         notebook.add(test_frame, text="Test Client")
         self.create_test_tab(test_frame)
         
+        # Web Interface Tab
+        web_frame = ttk.Frame(notebook)
+        notebook.add(web_frame, text="Web Interface")
+        self.create_web_tab(web_frame)
+        
         # Settings Tab
         settings_frame = ttk.Frame(notebook)
         notebook.add(settings_frame, text="Settings")
@@ -1278,6 +1425,68 @@ Test results will appear here...
         
         self.test_log_text.insert("1.0", instruction_text)
     
+    def create_web_tab(self, parent):
+        """Create web interface tab"""
+        # Web server status frame
+        status_frame = ttk.LabelFrame(parent, text="Web Interface Status", padding="10")
+        status_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # Web server status
+        self.web_status_label = ttk.Label(status_frame, text="[STOP] Web Server Stopped", 
+                                         font=("Arial", 12, "bold"))
+        self.web_status_label.pack(pady=10)
+        
+        self.web_info_label = ttk.Label(status_frame, text="", font=("Arial", 9))
+        self.web_info_label.pack(pady=5)
+        
+        # Web server controls
+        web_button_frame = ttk.Frame(status_frame)
+        web_button_frame.pack(pady=10)
+        
+        self.start_web_button = ttk.Button(web_button_frame, text="Start Web Server", 
+                                          command=self.start_web_server, width=15)
+        self.start_web_button.pack(side=tk.LEFT, padx=5)
+        
+        self.stop_web_button = ttk.Button(web_button_frame, text="Stop Web Server", 
+                                         command=self.stop_web_server, width=15, state="disabled")
+        self.stop_web_button.pack(side=tk.LEFT, padx=5)
+        
+        self.open_web_button = ttk.Button(web_button_frame, text="Open in Browser", 
+                                         command=self.open_web_interface, width=15, state="disabled")
+        self.open_web_button.pack(side=tk.LEFT, padx=5)
+        
+        # Instructions frame
+        instructions_frame = ttk.LabelFrame(parent, text="How to Use Web Interface", padding="10")
+        instructions_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        instructions_text = """Web Interface Instructions:
+============================
+
+1. Click 'Start Web Server' to enable the web interface
+2. The web server will run on port 8080 by default
+3. Open http://YOUR_IP:8080 in any web browser on your network
+4. Drag and drop files onto the web page to print them instantly
+5. The web interface works on phones, tablets, and computers
+
+Features:
+• Beautiful drag & drop interface
+• Real-time upload progress
+• Automatic file type detection  
+• Support for PDF, DOC, TXT, and image files
+• Mobile-friendly responsive design
+• No software installation required on client devices
+
+Perfect for:
+• Printing from phones and tablets
+• Guest computers without printer drivers
+• Remote printing over network
+• Quick document sharing and printing
+"""
+        
+        instructions_label = ttk.Label(instructions_frame, text=instructions_text, 
+                                     justify=tk.LEFT, font=("Consolas", 9))
+        instructions_label.pack(anchor=tk.W, fill=tk.BOTH, expand=True)
+    
     def create_settings_tab(self, parent):
         """Create settings tab"""
         # Application settings
@@ -1419,6 +1628,7 @@ Includes a GUI management interface and test client with PDF conversion for test
         """Update all status displays"""
         self.update_server_status()
         self.update_autostart_status()
+        self.update_web_status()
     
     def update_server_status(self):
         """Update server status display"""
@@ -1538,6 +1748,72 @@ If you can see this printed output, the PrinterOne server is working correctly!
         
         threading.Thread(target=run_test, daemon=True).start()
     
+    def start_web_server(self):
+        """Start the web server"""
+        if self.web_thread and self.web_thread.is_alive():
+            self.log_message("[WARN] Web server is already running!")
+            return
+        
+        if not FLASK_AVAILABLE:
+            self.log_message("[ERROR] Flask not available! Please install: pip install flask")
+            return
+        
+        # Start web server in separate thread
+        self.web_thread = threading.Thread(target=self._run_web_server, daemon=True)
+        self.web_thread.start()
+        
+        self.log_message("[WEB] Starting web server...")
+        self.update_web_status()
+        
+        # Give web server time to start
+        self.root.after(2000, self.update_web_status)
+    
+    def _run_web_server(self):
+        """Run web server in thread"""
+        try:
+            self.web_server.start_web_server(host='0.0.0.0', port=8080)
+        except Exception as e:
+            self.log_message(f"[WEB] Web server error: {e}")
+    
+    def stop_web_server(self):
+        """Stop the web server"""
+        self.web_server.stop_web_server()
+        self.log_message("[WEB] Web server stopped")
+        self.update_web_status()
+    
+    def open_web_interface(self):
+        """Open web interface in browser"""
+        try:
+            import webbrowser
+            local_ip = self.server.get_local_ip()
+            url = f"http://{local_ip}:8080"
+            webbrowser.open(url)
+            self.log_message(f"[WEB] Opened browser: {url}")
+        except Exception as e:
+            self.log_message(f"[WEB] Error opening browser: {e}")
+    
+    def update_web_status(self):
+        """Update web server status display"""
+        if hasattr(self.web_server, 'running') and self.web_server.running:
+            self.web_status_label.config(text="[OK] Web Server Running", foreground="green")
+            self.start_web_button.config(state="disabled")
+            self.stop_web_button.config(state="normal")
+            self.open_web_button.config(state="normal")
+            
+            try:
+                local_ip = self.server.get_local_ip()
+                info_text = f"URL: http://{local_ip}:8080"
+            except:
+                info_text = "URL: http://localhost:8080"
+            
+            self.web_info_label.config(text=info_text)
+        else:
+            self.web_status_label.config(text="[STOP] Web Server Stopped", foreground="red")
+            self.start_web_button.config(state="normal")
+            self.stop_web_button.config(state="disabled")
+            self.open_web_button.config(state="disabled")
+            self.web_info_label.config(text="")
+    
     def start_status_thread(self):
         """Start thread to periodically update status"""
         def status_updater():
@@ -1573,6 +1849,12 @@ If you can see this printed output, the PrinterOne server is working correctly!
             if self.server.running:
                 self.log_message("[STOP] Stopping server...")
                 self.server.stop_server()
+                time.sleep(1)
+            
+            # Stop web server
+            if hasattr(self, 'web_server') and hasattr(self.web_server, 'running') and self.web_server.running:
+                self.log_message("[WEB] Stopping web server...")
+                self.web_server.stop_web_server()
                 time.sleep(1)
             
             # Stop tray icon

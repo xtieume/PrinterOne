@@ -4,4 +4,6 @@ pywin32[service]>=306
 pyinstaller>=5.0.0
 pystray>=0.19.4
 Pillow>=9.0.0
-psutil>=5.8.0 
+psutil>=5.8.0
+flask>=2.0.0
+werkzeug>=2.0.0 
