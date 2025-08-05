@@ -7,6 +7,4 @@ build/
 
 __pycache__/
 
-dist/
-
 logs/
