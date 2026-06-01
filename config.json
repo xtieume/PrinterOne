@@ -7,5 +7,13 @@
     "service_name": "PrinterOne",
     "service_description": "PrinterOne - Network print server for raw print data",
     "manual": true,
-    "minimize_to_tray": true
+    "minimize_to_tray": true,
+    "printers": [
+        {
+            "printer_name": "",
+            "port": 9100,
+            "use_pdf_conversion": true,
+            "save_pdf_file": false
+        }
+    ]
 }

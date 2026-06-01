@@ -156,6 +156,9 @@ class PrinterOneServer:
             self.running = False
             self.log_callback = log_callback  # Callback function for logging to GUI
             
+            # Setup printer data logger
+            self.printer_logger = self.setup_printer_logger()
+            
             if startup_logger:
                 startup_logger.info("PrinterOneServer initialized successfully")
                 
@@ -165,6 +168,42 @@ class PrinterOneServer:
                 startup_logger.critical(error_msg)
                 startup_logger.critical(f"Traceback: {traceback.format_exc()}")
             raise
+    
+    def setup_printer_logger(self):
+        """Setup logger for printer data"""
+        try:
+            logs_dir = "logs"
+            try:
+                if not os.path.exists(logs_dir):
+                    os.makedirs(logs_dir)
+            except PermissionError:
+                import tempfile
+                logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+                if not os.path.exists(logs_dir):
+                    os.makedirs(logs_dir, exist_ok=True)
+            
+            printer_logger = logging.getLogger('printer_data')
+            printer_logger.setLevel(logging.INFO)
+            
+            # Remove existing handlers to avoid duplicates
+            for handler in printer_logger.handlers[:]:
+                printer_logger.removeHandler(handler)
+            
+            # Create printer data log file
+            timestamp = datetime.now().strftime("%Y%m%d")
+            printer_log_filename = f"{timestamp}_printer_data.log"
+            printer_log_path = os.path.join(logs_dir, printer_log_filename)
+            
+            file_handler = logging.FileHandler(printer_log_path, encoding='utf-8')
+            file_handler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            printer_logger.addHandler(file_handler)
+            
+            return printer_logger
+        except Exception as e:
+            print(f"Error setting up printer logger: {e}")
+            return logging.getLogger('printer_data')
     
     def log(self, message):
         """Log message to console and GUI if callback is set"""
@@ -179,84 +218,129 @@ class PrinterOneServer:
                     clean_message = message[bracket_end + 1:].strip()
             self.log_callback(clean_message)
     
+    def log_printer_data(self, printer_name, client_address, data_length, data_format, raw_data, success):
+        """Log detailed printer data to printer data log file"""
+        try:
+            logs_dir = "logs"
+            try:
+                if not os.path.exists(logs_dir):
+                    os.makedirs(logs_dir)
+            except PermissionError:
+                import tempfile
+                logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+                if not os.path.exists(logs_dir):
+                    os.makedirs(logs_dir, exist_ok=True)
+            
+            # Create printer-specific log
+            printer_safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in printer_name)
+            timestamp_date = datetime.now().strftime("%Y%m%d")
+            printer_log_filename = f"{timestamp_date}_{printer_safe_name}_data.log"
+            printer_log_path = os.path.join(logs_dir, printer_log_filename)
+            
+            # Prepare log entry
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            status = "SUCCESS" if success else "FAILED"
+            hex_preview = raw_data[:100].hex() if raw_data else ""
+            ascii_preview = ""
+            try:
+                ascii_preview = raw_data[:100].decode('utf-8', errors='ignore') if raw_data else ""
+                # Replace non-printable characters
+                ascii_preview = ''.join(c if 32 <= ord(c) <= 126 else f'[{ord(c):02x}]' for c in ascii_preview)
+            except:
+                pass
+            
+            log_entry = f"""
+================================================================================
+TIMESTAMP: {timestamp}
+STATUS: {status}
+PRINTER: {printer_name}
+CLIENT IP: {client_address[0]}
+CLIENT PORT: {client_address[1]}
+DATA SIZE: {data_length} bytes
+DATA FORMAT: {data_format}
+================================================================================
+HEX PREVIEW (first 100 bytes):
+{' '.join(hex_preview[i:i+2] for i in range(0, len(hex_preview), 2))}
+
+ASCII PREVIEW (first 100 bytes):
+{ascii_preview}
+
+FULL HEX DUMP:
+"""
+            
+            # Add full hex dump
+            if raw_data:
+                hex_data = raw_data.hex()
+                for i in range(0, len(hex_data), 32):
+                    line = hex_data[i:i+32]
+                    formatted_line = ' '.join([line[j:j+2] for j in range(0, len(line), 2)])
+                    log_entry += f"{formatted_line}\n"
+            
+            log_entry += "================================================================================\n"
+            
+            # Write to printer-specific log file
+            try:
+                with open(printer_log_path, 'a', encoding='utf-8') as f:
+                    f.write(log_entry)
+            except PermissionError:
+                # Fallback to temp directory
+                temp_logs_dir = os.path.join(tempfile.gettempdir(), "PrinterOne", "logs")
+                os.makedirs(temp_logs_dir, exist_ok=True)
+                printer_log_path = os.path.join(temp_logs_dir, printer_log_filename)
+                with open(printer_log_path, 'a', encoding='utf-8') as f:
+                    f.write(log_entry)
+            
+            # Also log to the general printer data logger
+            summary = f"Printer: {printer_name} | Client: {client_address[0]}:{client_address[1]} | Size: {data_length} bytes | Format: {data_format} | Status: {status}"
+            self.printer_logger.info(summary)
+            
+            self.log(f"[LOG] Printer data logged to {printer_log_filename}")
+            
+        except Exception as e:
+            self.log(f"[!] Error logging printer data: {e}")
+            if startup_logger:
+                startup_logger.error(f"Error logging printer data: {e}")
+    
     def load_config(self):
-        """Load configuration from config.json"""
+        """Load configuration from config.json (multi-printer support)"""
         default_config = {
-            "printer_name": "",
-            "port": 9100,
-            "use_pdf_conversion": True,
-            "save_pdf_file": False,
+            "printers": [
+                {
+                    "printer_name": "",
+                    "port": 9100,
+                    "use_pdf_conversion": True,
+                    "save_pdf_file": False
+                }
+            ],
             "auto_start": False,
             "service_name": "PrinterOne",
             "service_description": "PrinterOne - Network print server for raw print data",
             "manual": False,
             "minimize_to_tray": True
         }
-        
-        # Try multiple config file locations
         config_paths = [
-            'config.json',  # Current directory first
-            os.path.join(os.path.expanduser('~'), 'PrinterOne', 'config.json'),  # User home
-            os.path.join(os.environ.get('APPDATA', ''), 'PrinterOne', 'config.json'),  # AppData
-            os.path.join(tempfile.gettempdir(), 'PrinterOne', 'config.json')  # Temp directory
+            'config.json',
+            os.path.join(os.path.expanduser('~'), 'PrinterOne', 'config.json'),
+            os.path.join(os.environ.get('APPDATA', ''), 'PrinterOne', 'config.json'),
+            os.path.join(tempfile.gettempdir(), 'PrinterOne', 'config.json')
         ]
-        
-        # Store the successful config path for saving
         self.config_path = None
-        
         try:
             for config_path in config_paths:
-                try:
-                    config_path = os.path.abspath(config_path)
-                    if startup_logger:
-                        startup_logger.info(f"Trying to load configuration from: {config_path}")
-                    
-                    if os.path.exists(config_path):
-                        if startup_logger:
-                            startup_logger.info(f"Config file exists at: {config_path}")
-                        
-                        with open(config_path, 'r') as f:
-                            config = json.load(f)
-                            
-                        if startup_logger:
-                            startup_logger.info(f"Config loaded from file: {config}")
-                        
-                        # Merge with defaults
-                        for key, value in default_config.items():
-                            if key not in config:
-                                config[key] = value
-                                
-                        if startup_logger:
-                            startup_logger.info(f"Final merged config: {config}")
-                        
-                        self.config_path = config_path  # Remember successful path
-                        return config
-                except PermissionError:
-                    if startup_logger:
-                        startup_logger.warning(f"Permission denied accessing: {config_path}")
-                    continue
-                except Exception as e:
-                    if startup_logger:
-                        startup_logger.warning(f"Error loading from {config_path}: {e}")
-                    continue
-            
-            # No config file found or accessible
-            if startup_logger:
-                startup_logger.info("No config.json found or accessible, using defaults")
-                    
+                config_path = os.path.abspath(config_path)
+                if os.path.exists(config_path):
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                    for key, value in default_config.items():
+                        if key not in config:
+                            config[key] = value
+                    if not isinstance(config.get("printers", []), list):
+                        config["printers"] = default_config["printers"]
+                    self.config_path = config_path
+                    return config
         except Exception as e:
-            error_msg = f"Error in config loading process: {e}"
-            if startup_logger:
-                startup_logger.error(error_msg)
-                startup_logger.error(f"Traceback: {traceback.format_exc()}")
-            self.log(f"[!] {error_msg}")
-        
-        if startup_logger:
-            startup_logger.info(f"Using default config: {default_config}")
-        
-        # Set a fallback config path for saving
+            self.log(f"[!] Error loading config: {e}")
         if not self.config_path:
-            # Try to create a writable config directory
             for base_path in [os.path.expanduser('~'), os.environ.get('APPDATA', ''), tempfile.gettempdir()]:
                 try:
                     config_dir = os.path.join(base_path, 'PrinterOne')
@@ -266,67 +350,43 @@ class PrinterOneServer:
                     break
                 except:
                     continue
-            
             if not self.config_path:
                 self.config_path = os.path.join(tempfile.gettempdir(), 'PrinterOne_config.json')
-        
         return default_config
     
-    def save_config(self, printer_name=None, port=None, use_pdf_conversion=None, save_pdf_file=None):
-        """Save configuration to config.json"""
+    def save_config(self, printers=None):
+        """Save configuration to config.json (multi-printer support)"""
         try:
-            if printer_name is not None:
-                self.config["printer_name"] = printer_name
-            if port is not None:
-                self.config["port"] = port
-            if use_pdf_conversion is not None:
-                self.config["use_pdf_conversion"] = use_pdf_conversion
-            if save_pdf_file is not None:
-                self.config["save_pdf_file"] = save_pdf_file
-            
+            if printers is not None:
+                self.config["printers"] = printers
             self.config["manual"] = True
-            
-            # Use the config path determined during load, or try fallback locations
             config_paths_to_try = []
-            
             if hasattr(self, 'config_path') and self.config_path:
                 config_paths_to_try.append(self.config_path)
-            
-            # Fallback locations in order of preference
             config_paths_to_try.extend([
-                'config.json',  # Current directory
-                os.path.join(os.path.expanduser('~'), 'PrinterOne', 'config.json'),  # User home
-                os.path.join(os.environ.get('APPDATA', ''), 'PrinterOne', 'config.json'),  # AppData
-                os.path.join(tempfile.gettempdir(), 'PrinterOne', 'config.json')  # Temp directory
+                'config.json',
+                os.path.join(os.path.expanduser('~'), 'PrinterOne', 'config.json'),
+                os.path.join(os.environ.get('APPDATA', ''), 'PrinterOne', 'config.json'),
+                os.path.join(tempfile.gettempdir(), 'PrinterOne', 'config.json')
             ])
-            
-            # Try to save to each location until one succeeds
             for config_path in config_paths_to_try:
                 try:
-                    # Ensure directory exists
                     config_dir = os.path.dirname(config_path)
                     if config_dir and not os.path.exists(config_dir):
                         os.makedirs(config_dir, exist_ok=True)
-                    
-                    # Try to save
                     with open(config_path, 'w') as f:
                         json.dump(self.config, f, indent=4)
-                    
                     self.log(f"[SAVE] Configuration saved to {config_path}")
-                    self.config_path = config_path  # Remember successful path
+                    self.config_path = config_path
                     return True
-                    
                 except PermissionError:
                     self.log(f"[WARN] Permission denied saving to {config_path}, trying next location...")
                     continue
                 except Exception as e:
                     self.log(f"[WARN] Error saving to {config_path}: {e}, trying next location...")
                     continue
-            
-            # If all locations failed
             self.log(f"[!] Failed to save configuration to any location")
             return False
-            
         except Exception as e:
             self.log(f"[!] Error in save_config: {e}")
             return False
@@ -550,7 +610,7 @@ class PrinterOneServer:
             
             return f"Binary/Unknown format ({len(data)} bytes)"
     
-    def print_raw(self, data, printer_name):
+    def print_raw(self, data, printer_name, client_address=None):
         """Send raw data to printer"""
         try:
             self.log(f"[INFO] Opening printer: {printer_name}")
@@ -565,9 +625,23 @@ class PrinterOneServer:
             win32print.ClosePrinter(hPrinter)
             
             self.log(f"[OK] Successfully printed {len(data)} bytes.")
+            
+            # Log the data sent to printer
+            data_format = self.analyze_raw_data(data)
+            if client_address is None:
+                client_address = ("Unknown", 0)
+            self.log_printer_data(printer_name, client_address, len(data), data_format, data, True)
+            
             return True
         except Exception as e:
             self.log(f"[!] Print error: {e}")
+            
+            # Log the failed print attempt
+            data_format = self.analyze_raw_data(data)
+            if client_address is None:
+                client_address = ("Unknown", 0)
+            self.log_printer_data(printer_name, client_address, len(data), data_format, data, False)
+            
             return False
     
     
@@ -713,76 +787,95 @@ class PrinterOneServer:
             return '127.0.0.1'
     
     def start_server(self):
-        """Start the TCP print server"""
+        """Start TCP print servers for all configured printers"""
         global SERVER_RUNNING
         SERVER_RUNNING = True
-        
-        printer_name = self.config.get("printer_name", "")
-        port = self.config.get("port", 9100)
-        
-        if not printer_name:
-            self.log("[!] No printer configured!")
+        printers = self.config.get("printers", [])
+        if not printers or not any(p.get("printer_name") for p in printers):
+            self.log("[!] No printers configured!")
             return False
-        
-        # Kill any process using the port first
-        self.log(f"[KILL] Checking for processes using port {port}...")
-        self.kill_process_on_port(port)
-        
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.settimeout(1.0)
-        
-        try:
-            self.server_socket.bind(('0.0.0.0', port))
-            self.server_socket.listen(5)
-            self.running = True
-            
-            self.log(f"[OK] Server started on port {port}")
-            self.log(f"[PRINTER] Using printer: {printer_name}")
-            
-            # Get local IP addresses using improved method
-            local_ip = self.get_local_ip()
-            self.log(f"[IP] Local IP: {local_ip}")
-            self.log(f"[CONNECT] Other machines can connect to: {local_ip}:{port}")
-            
-            while SERVER_RUNNING and self.running:
-                try:
-                    client_socket, address = self.server_socket.accept()
-                    client_thread = threading.Thread(
-                        target=self.handle_client, 
-                        args=(client_socket, address)
-                    )
-                    client_thread.daemon = True
-                    client_thread.start()
-                except socket.timeout:
-                    continue
-                except Exception as e:
-                    if self.running:
-                        self.log(f"[!] Error accepting client: {e}")
-                    break
-                    
-        except Exception as e:
-            self.log(f"[!] Server error: {e}")
-            return False
-        finally:
-            self.stop_server()
-        
+        self.running = True
+        self.server_sockets = {}
+        self.server_threads = {}
+        for printer_cfg in printers:
+            printer_name = printer_cfg.get("printer_name", "")
+            port = printer_cfg.get("port", 9100)
+            if not printer_name:
+                continue
+            self.log(f"[KILL] Checking for processes using port {port}...")
+            self.kill_process_on_port(port)
+            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.settimeout(1.0)
+            try:
+                server_socket.bind(('0.0.0.0', port))
+                server_socket.listen(5)
+                self.server_sockets[(printer_name, port)] = server_socket
+                t = threading.Thread(target=self._server_loop, args=(server_socket, printer_name, port), daemon=True)
+                self.server_threads[(printer_name, port)] = t
+                t.start()
+                self.log(f"[OK] Server started on port {port} for printer: {printer_name}")
+                local_ip = self.get_local_ip()
+                self.log(f"[IP] Local IP: {local_ip}")
+                self.log(f"[CONNECT] Other machines can connect to: {local_ip}:{port}")
+            except Exception as e:
+                self.log(f"[!] Server error on port {port}: {e}")
         return True
+
+    def _server_loop(self, server_socket, printer_name, port):
+        while SERVER_RUNNING and self.running:
+            try:
+                client_socket, address = server_socket.accept()
+                client_thread = threading.Thread(
+                    target=self.handle_client_multi,
+                    args=(client_socket, address, printer_name),
+                    daemon=True
+                )
+                client_thread.start()
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    self.log(f"[!] Error accepting client on port {port}: {e}")
+                break
+
+    def handle_client_multi(self, client_socket, address, printer_name):
+        self.log(f"[CONN] Client connected: {address} (printer: {printer_name})")
+        try:
+            data = b""
+            while True:
+                chunk = client_socket.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            if data:
+                self.log(f"[DATA] Received {len(data)} bytes from {address} (printer: {printer_name})")
+                self.log(f"[INFO] Data format: {self.analyze_raw_data(data)}")
+                if printer_name:
+                    self.print_raw(data, printer_name, client_address=address)
+                else:
+                    self.log(f"[!] No printer configured")
+            else:
+                self.log(f"[!] No data received from {address}")
+        except Exception as e:
+            self.log(f"[!] Error handling client {address}: {e}")
+        finally:
+            client_socket.close()
+            self.log(f"[CONN] Client disconnected: {address}")
     
     def stop_server(self):
-        """Stop the TCP print server"""
+        """Stop all TCP print servers"""
         global SERVER_RUNNING
         SERVER_RUNNING = False
         self.running = False
-        
-        if self.server_socket:
+        for key, server_socket in getattr(self, 'server_sockets', {}).items():
             try:
-                self.server_socket.close()
+                server_socket.close()
             except:
                 pass
-            self.server_socket = None
-        
-        self.log("[DONE] Server stopped")
+        self.server_sockets = {}
+        self.server_threads = {}
+        self.log("[DONE] All servers stopped")
 
 class TestClient:
     """Test client for the print server"""
@@ -1028,6 +1121,7 @@ class PrinterOneGUI:
                 self.init_logger.info("Binding window events...")
             
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+            self.root.bind("<Unmap>", self.on_minimize)
             
             if self.init_logger:
                 self.init_logger.info("Window events binding completed")
@@ -1136,86 +1230,127 @@ class PrinterOneGUI:
         self.create_settings_tab(settings_frame)
     
     def create_server_tab(self, parent):
-        """Create server management tab"""
-        # Top section - Configuration and Control
+        """Create server management tab (multi-printer)"""
         top_frame = ttk.Frame(parent)
         top_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Configuration frame
-        config_frame = ttk.LabelFrame(top_frame, text="Configuration", padding="10")
+
+        config_frame = ttk.LabelFrame(top_frame, text="Configuración de impresoras", padding="10")
         config_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        
-        # Printer selection
-        ttk.Label(config_frame, text="Printer:").pack(anchor=tk.W)
-        printer_combo = ttk.Combobox(config_frame, textvariable=self.printer_var, width=40)
+
+        # Tabla de impresoras
+        columns = ("printer_name", "port")
+        self.printer_tree = ttk.Treeview(config_frame, columns=columns, show="headings", height=5)
+        self.printer_tree.heading("printer_name", text="Impresora")
+        self.printer_tree.heading("port", text="Puerto")
+        self.printer_tree.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        self.refresh_printer_tree()
+
+        # Formulario para agregar/editar
+        form_frame = ttk.Frame(config_frame)
+        form_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(form_frame, text="Impresora:").grid(row=0, column=0, sticky=tk.W)
+        self.form_printer_var = tk.StringVar()
+        printer_combo = ttk.Combobox(form_frame, textvariable=self.form_printer_var, width=30)
         printer_combo['values'] = self.server.list_printers()
-        printer_combo.pack(fill=tk.X, pady=(5, 10))
-        
-        # Port configuration
-        ttk.Label(config_frame, text="Port:").pack(anchor=tk.W)
-        port_entry = ttk.Entry(config_frame, textvariable=self.port_var, width=10)
-        port_entry.pack(anchor=tk.W, pady=(5, 10))
-        
-        # Save config button
-        ttk.Button(config_frame, text="Save Configuration", 
-                  command=self.save_configuration).pack(fill=tk.X)
-        
-        # Control frame
+        printer_combo.grid(row=0, column=1, padx=5, pady=2)
+        ttk.Label(form_frame, text="Puerto:").grid(row=0, column=2, sticky=tk.W)
+        self.form_port_var = tk.IntVar(value=9100)
+        port_entry = ttk.Entry(form_frame, textvariable=self.form_port_var, width=8)
+        port_entry.grid(row=0, column=3, padx=5, pady=2)
+
+        # Botones de agregar/editar/eliminar
+        btn_frame = ttk.Frame(config_frame)
+        btn_frame.pack(fill=tk.X)
+        ttk.Button(btn_frame, text="Agregar", command=self.add_printer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Editar", command=self.edit_printer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Eliminar", command=self.delete_printer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Guardar configuración", command=self.save_configuration).pack(side=tk.LEFT, padx=10)
+
+        # Control frame igual que antes
         control_frame = ttk.LabelFrame(top_frame, text="Server Control", padding="10")
         control_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(5, 0))
-        
-        # Server status
-        self.server_status_label = ttk.Label(control_frame, text="[STOP] Server Stopped", 
-                                           font=("Arial", 12, "bold"))
+        self.server_status_label = ttk.Label(control_frame, text="[STOP] Servidores detenidos", font=("Arial", 12, "bold"))
         self.server_status_label.pack(pady=10)
-        
         self.server_info_label = ttk.Label(control_frame, text="", font=("Arial", 9))
         self.server_info_label.pack(pady=5)
-        
-        # Control buttons
         button_frame = ttk.Frame(control_frame)
         button_frame.pack(pady=10)
-        
-        self.start_button = ttk.Button(button_frame, text="Start Server", 
-                                      command=self.start_server, width=15)
+        self.start_button = ttk.Button(button_frame, text="Start Server", command=self.start_server, width=15)
         self.start_button.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_button = ttk.Button(button_frame, text="Stop Server", 
-                                     command=self.stop_server, width=15, state="disabled")
+        self.stop_button = ttk.Button(button_frame, text="Stop Server", command=self.stop_server, width=15, state="disabled")
         self.stop_button.pack(side=tk.LEFT, padx=5)
-        
-        # Auto-start section
         autostart_frame = ttk.LabelFrame(control_frame, text="Auto-Start", padding="10")
         autostart_frame.pack(fill=tk.X, pady=(10, 0))
-        
         self.autostart_status_label = ttk.Label(autostart_frame, text="Checking...")
         self.autostart_status_label.pack()
-        
         autostart_button_frame = ttk.Frame(autostart_frame)
         autostart_button_frame.pack(pady=5)
-        
-        self.add_autostart_button = ttk.Button(autostart_button_frame, text="Add", 
-                                              command=self.add_to_startup, width=12)
+        self.add_autostart_button = ttk.Button(autostart_button_frame, text="Add", command=self.add_to_startup, width=12)
         self.add_autostart_button.pack(side=tk.LEFT, padx=2)
-        
-        self.remove_autostart_button = ttk.Button(autostart_button_frame, text="Remove", 
-                                                 command=self.remove_from_startup, width=12)
+        self.remove_autostart_button = ttk.Button(autostart_button_frame, text="Remove", command=self.remove_from_startup, width=12)
         self.remove_autostart_button.pack(side=tk.LEFT, padx=2)
-        
-        # Log section
         log_frame = ttk.LabelFrame(parent, text="Server Log", padding="10")
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        
-        # Create text widget with scrollbar
         log_text_frame = ttk.Frame(log_frame)
         log_text_frame.pack(fill=tk.BOTH, expand=True)
-        
         self.log_text = tk.Text(log_text_frame, height=15, font=("Consolas", 9))
         log_scrollbar = ttk.Scrollbar(log_text_frame, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
-        
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def refresh_printer_tree(self):
+        for i in getattr(self, 'printer_tree', []).get_children() if hasattr(self, 'printer_tree') else []:
+            self.printer_tree.delete(i)
+        for p in self.server.config.get("printers", []):
+            self.printer_tree.insert("", "end", values=(p.get("printer_name", ""), p.get("port", 9100)))
+
+    def add_printer(self):
+        name = self.form_printer_var.get()
+        port = self.form_port_var.get()
+        if not name:
+            self.log_message("[WARN] Selecciona una impresora.")
+            return
+        for p in self.server.config.get("printers", []):
+            if p["printer_name"] == name and p["port"] == port:
+                self.log_message("[WARN] Ya existe esa impresora con ese puerto.")
+                return
+        self.server.config["printers"].append({"printer_name": name, "port": port, "use_pdf_conversion": True, "save_pdf_file": False})
+        self.refresh_printer_tree()
+        self.log_message(f"[OK] Impresora agregada: {name} (puerto {port})")
+
+    def edit_printer(self):
+        selected = self.printer_tree.selection()
+        if not selected:
+            self.log_message("[WARN] Selecciona una impresora para editar.")
+            return
+        item = self.printer_tree.item(selected[0])
+        old_name, old_port = item["values"]
+        name = self.form_printer_var.get()
+        port = self.form_port_var.get()
+        found = False
+        for p in self.server.config.get("printers", []):
+            if p["printer_name"] == old_name and p["port"] == int(old_port):
+                p["printer_name"] = name
+                p["port"] = port
+                found = True
+                break
+        if found:
+            self.refresh_printer_tree()
+            self.log_message(f"[OK] Impresora editada: {name} (puerto {port})")
+        else:
+            self.log_message("[WARN] No se encontró la impresora para editar.")
+
+    def delete_printer(self):
+        selected = self.printer_tree.selection()
+        if not selected:
+            self.log_message("[WARN] Selecciona una impresora para eliminar.")
+            return
+        item = self.printer_tree.item(selected[0])
+        name, port = item["values"]
+        self.server.config["printers"] = [p for p in self.server.config.get("printers", []) if not (p["printer_name"] == name and p["port"] == int(port))]
+        self.refresh_printer_tree()
+        self.log_message(f"[OK] Impresora eliminada: {name} (puerto {port})")
     
     def create_test_tab(self, parent):
         """Create test client tab"""
@@ -1343,54 +1478,29 @@ Includes a GUI management interface and test client with PDF conversion for test
             self.log_text.delete('1.0', '100.0')
     
     def save_configuration(self):
-        """Save the current configuration"""
-        printer_name = self.printer_var.get()
-        port = self.port_var.get()
-        
-        if not printer_name:
-            self.log_message("[WARN] Please select a printer first!")
-            return
-        
-        if self.server.save_config(printer_name=printer_name, port=port):
-            self.log_message("[OK] Configuration saved successfully!")
+        """Guardar la configuración de todas las impresoras"""
+        if self.server.save_config(printers=self.server.config.get("printers", [])):
+            self.log_message("[OK] Configuración guardada correctamente!")
         else:
-            self.log_message("[ERROR] Failed to save configuration!")
-        
-        # Update port in test client if not manually changed
-        if self.test_port_var.get() == 9100 or self.test_port_var.get() == self.server.config.get("port", 9100):
-            self.test_port_var.set(port)
+            self.log_message("[ERROR] No se pudo guardar la configuración!")
     
     def start_server(self):
-        """Start the print server"""
-        if self.server_thread and self.server_thread.is_alive():
-            self.log_message("[WARN] Server is already running!")
+        """Iniciar el servidor para todas las impresoras"""
+        if hasattr(self, 'server_thread') and self.server_thread and self.server_thread.is_alive():
+            self.log_message("[WARN] El servidor ya está en ejecución!")
             return
-        
-        printer_name = self.printer_var.get()
-        port = self.port_var.get()
-        
-        if not printer_name:
-            self.log_message("[WARN] Please select a printer first!")
-            return
-        
-        # Save current configuration
-        if self.server.save_config(printer_name=printer_name, port=port):
-            self.log_message("[OK] Configuration saved")
-        
-        # Start server in separate thread
+        # Guardar configuración antes de iniciar
+        self.save_configuration()
         self.server_thread = threading.Thread(target=self.server.start_server, daemon=True)
         self.server_thread.start()
-        
-        self.log_message("[START] Starting server...")
+        self.log_message("[START] Iniciando servidores para todas las impresoras...")
         self.update_server_status()
-        
-        # Give server time to start
         self.root.after(1000, self.update_server_status)
     
     def stop_server(self):
-        """Stop the print server"""
+        """Detener todos los servidores"""
         self.server.stop_server()
-        self.log_message("[STOP] Server stopped")
+        self.log_message("[STOP] Todos los servidores detenidos")
         self.update_server_status()
     
     def auto_start_server(self):
@@ -1421,22 +1531,21 @@ Includes a GUI management interface and test client with PDF conversion for test
         self.update_autostart_status()
     
     def update_server_status(self):
-        """Update server status display"""
-        if self.server.running:
-            self.server_status_label.config(text="[OK] Server Running", foreground="green")
+        """Actualizar estado de los servidores"""
+        if self.server.running and getattr(self.server, 'server_sockets', {}):
+            self.server_status_label.config(text="[OK] Servidores activos", foreground="green")
             self.start_button.config(state="disabled")
             self.stop_button.config(state="normal")
-            
-            port = self.server.config.get("port", 9100)
-            try:
-                local_ip = self.server.get_local_ip()
-                info_text = f"Port: {port} | IP: {local_ip}"
-            except:
-                info_text = f"Port: {port}"
-            
-            self.server_info_label.config(text=info_text)
+            info = []
+            for (printer, port) in self.server.server_sockets:
+                try:
+                    local_ip = self.server.get_local_ip()
+                    info.append(f"{printer}: {local_ip}:{port}")
+                except:
+                    info.append(f"{printer}: {port}")
+            self.server_info_label.config(text=" | ".join(info))
         else:
-            self.server_status_label.config(text="[STOP] Server Stopped", foreground="red")
+            self.server_status_label.config(text="[STOP] Servidores detenidos", foreground="red")
             self.start_button.config(state="normal")
             self.stop_button.config(state="disabled")
             self.server_info_label.config(text="")
@@ -1556,6 +1665,11 @@ If you can see this printed output, the PrinterOne server is working correctly!
             self.hide_window()
         else:
             self.quit_app()
+
+    def on_minimize(self, event):
+        """Minimizar a la bandeja al minimizar la ventana"""
+        if self.root.state() == "iconic" and self.minimize_to_tray and TRAY_AVAILABLE:
+            self.hide_window()
     
     def on_minimize_option_changed(self):
         """Handle minimize to tray option change"""
