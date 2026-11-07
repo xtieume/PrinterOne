@@ -18,6 +18,13 @@ import (
 	"github.com/xtieume/PrinterOne/internal/core/spool"
 )
 
+// TestMain fixes the local zone once, before any server goroutine runs: a test that swaps time.Local while
+// another test's server is still logging is a data race (seen under -race on 2026-11-07).
+func TestMain(m *testing.M) {
+	time.Local = time.FixedZone("UTC+7", 7*3600)
+	os.Exit(m.Run())
+}
+
 const printerName = "Canon MF220 Series"
 
 // ---- fake spooler (fixture S-fake for the CLI) ----
@@ -865,9 +872,7 @@ func TestREQ_CLI_005_WaitingJobPrintedOnCtrlC(t *testing.T) {
 
 // TC-LOG-008
 func TestREQ_LOG_001_ServeLogsPrinterValueNotName(t *testing.T) {
-	oldLocal := time.Local
-	time.Local = time.FixedZone("UTC+7", 7*3600) // the production Now must log local time, not UTC
-	defer func() { time.Local = oldLocal }()
+	// TestMain sets time.Local to UTC+7: the production Now must log local time, not UTC
 	r := newRig(t, "main")
 	defer r.cleanup()
 	r.start("serve", "--config", r.cfg)
