@@ -3,7 +3,7 @@
     {
       "id": "F-001",
       "revision": 1,
-      "behavior": "One printer: RAW jobs over TCP printed through winspool, console and Windows service, v1 config migrated",
+      "behavior": "One printer: RAW jobs over TCP printed through winspool from the console (serve), both editions",
       "spec": "docs/specs/2026-11-07-f001-core.md",
       "acceptance": [
         "REQ-CFG-001",
@@ -18,15 +18,14 @@
         "REQ-RECV-004",
         "REQ-RECV-005",
         "REQ-RECV-006",
+        "REQ-RECV-007",
+        "REQ-RECV-008",
         "REQ-SPOOL-001",
         "REQ-SPOOL-002",
         "REQ-SPOOL-003",
         "REQ-CLI-001",
         "REQ-CLI-002",
-        "REQ-SVC-001",
-        "REQ-SVC-002",
-        "REQ-SVC-003",
-        "REQ-SVC-004",
+        "REQ-CLI-003",
         "REQ-LOG-001",
         "REQ-E2E-001",
         "REQ-LEG-001"

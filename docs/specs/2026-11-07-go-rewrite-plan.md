@@ -14,8 +14,9 @@ atomic requirements before any code (skill `implement-feature`).
 | UI levels | Same functions, two looks. Server-rendered HTML where every action is a plain `<form>` POST (works in IE6 with no JS). `base.css` is minimal; `modern.css` is wrapped in `@supports (display:grid)` and `app.js` loads as `<script type="module">`, so old browsers (IE6–11, Chrome 49 / Firefox 52 on XP) ignore both. JS only enhances (live log via SSE, inline toggles) and calls the same endpoints the forms use. |
 | Remote admin | Off by default. Turning it on in config requires a password. |
 | Raw port auth (#2) | IP/CIDR allowlist per printer. No token on the RAW port: RAW 9100 has no header, so a token would break every standard printer driver. Tokens apply to the HTTP API only. |
-| Python v1 | Deleted from `master` in phase 0. Tag `v1.0.1` and its GitHub release keep it. |
-| Dropped from v1 | RAW→PDF conversion (reportlab, test-client only) and killing the process that holds a port. |
+| Python v1 | Deleted from `master` in phase 0. Tag `v1.0.1` and its GitHub release keep it. v2 is new software: no v1 config migration, no v1 auto-start cleanup, no rollback path (owner, 2026-11-07). |
+| Dropped from v1 | RAW→PDF conversion (reportlab, test-client only), killing the process that holds a port, the HKCU Run-key auto-start. |
+| Spec details | The owner delegates details below their answers to Claude (2026-11-07); each spec records them as such. |
 | Harness | Adapted from the LaunchPadTV harness (spec-first, goalrun-driven, receipts). See `docs/specs/2026-11-07-harness.md`. |
 | Language of the repo | English for every file, commit, PR and comment. |
 
@@ -40,7 +41,7 @@ printerone.exe tray       # main edition only: tray icon that talks to the HTTP 
   no tray: the exe opens the UI and a Start-menu shortcut is created.
 - **Logs**: one central folder (`%ProgramData%\PrinterOne\logs`), daily rotation, files opened with share-read so
   they can be tailed while the server runs, path configurable.
-- **Config**: JSON with a `printers` list; the v1 `config.json` (`printer_name`, `port`) migrates to one printer.
+- **Config**: JSON with `version: 2` and a `printers` list; looked up at `--config`, next to the exe, then ProgramData.
 
 ## 3. Project structure
 
@@ -80,7 +81,8 @@ issues and closing PR #5 are drafted and posted only after the owner approves th
 
 | Feature | Scope | Issues | Depends on |
 |---|---|---|---|
-| F-001 | Core parity with v1: receive RAW on TCP, print via winspool, config + v1 migration, service install/run, auto-start, Windows e2e check in CI | — | — |
+| F-001 | Core: config, receive RAW on TCP, print via winspool, `serve` / `printers` / `version`, Windows e2e check in CI | — | — |
+| F-008 | Windows service (install / uninstall / run, auto-start) with its log file, firewall rule added and removed with it | — | F-001 |
 | F-002 | Central log folder, daily rotation, share-read files, configurable path | #3 | F-001 |
 | F-003 | Several printers, one TCP port each | #1, #6 | F-001 |
 | F-004 | Per-printer IP/CIDR allowlist | #2 | F-003 |
@@ -96,7 +98,7 @@ Each spec stays around 10–25 atomic REQs; a bigger one is split.
 |---|---|---|
 | 0 | Go skeleton (`cmd/`, `internal/core/buildinfo`), harness (script, hook, rules, skills, roles, self-test), CI `verify.yml`, Python removed, README notice | `lint-rules`, `go-test`, `go-vet`, `win-build`, `core-go110`, `harness-selftest` PASS; PR opened with `Spec-Exempt` |
 | 1 | F-001 through the full harness loop; first real run, then tune the skills | receipt for F-001 |
-| 2 | F-002 → F-003 → F-004, one PR each | receipts |
+| 2 | F-008 → F-002 → F-003 → F-004, one PR each | receipts |
 | 3 | F-005 | receipt; MANUAL rows signed in IE6/IE8 and a modern browser |
 | 4 | F-006 (+ F-007 alongside) | MANUAL rows signed on XP and Win7 VMs |
 | 5 | `release.yml` builds both exes on a `v*` tag; v2.0.0 release; issue replies and PR #5 closed (owner-approved) | release published |
