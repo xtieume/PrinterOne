@@ -343,3 +343,92 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-ALLOW-042 | REQ-ALLOW-007 | `TestREQ_ALLOW_007_ListOnLaterEntryOnly` | List on a later entry only; catches: `Allow` indexed by entries-with-list (shift) |
 | TC-ALLOW-043 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_NilIPNotAllowedByAList` | A list never allows a nil IP; catches: fail-open when the client IP is unknown |
 | TC-ALLOW-044 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_MappedItemMatchesIPv4Client` | A mapped item matches the plain IPv4 client; catches: mapped item stored as /128 compared byte-wise |
+| TC-UI-001 | REQ-UI-001 | `TestREQ_UI_001_DefaultPort9180RemoteOff` | No `ui` section → port 9180, remote off; catches: default 0 / 80 / 9100 |
+| TC-UI-002 | REQ-UI-001 | `TestREQ_UI_001_ConfiguredPortUsed` | `ui.port` 9181 is used; catches: section ignored, always default |
+| TC-UI-003 | REQ-UI-001 | `TestREQ_UI_001_BindsLoopbackAndServes` | UI bound to loopback only when remote is off; catches: bound to `0.0.0.0` / `:port` |
+| TC-UI-004 | REQ-UI-001 | pending: cli / reload wiring test (build step) | `serve --config <cfg>` serves the UI on ui.port; catches: UI started only by no-args |
+| TC-UI-005 | REQ-UI-001 | pending: cli / reload wiring test (build step) | `service run --config <cfg>` serves the UI, opens no browser; catches: browser opened from the service (session 0) |
+| TC-UI-006 | REQ-UI-001 | pending: cli / reload wiring test (build step) | UI port busy → exit 1 naming the port, nothing listens; catches: printers served without UI |
+| TC-UI-007 | REQ-UI-002 | `TestREQ_UI_002_PortEqualToPrinterPort` | `ui.port` equal to the printer port; catches: only range checked |
+| TC-UI-008 | REQ-UI-002 | `TestREQ_UI_002_PortRangeBoundaries` | `ui.port` 0 and 65536 refused, 1 and 65535 accepted; catches: `<=` / `<` off by one |
+| TC-UI-009 | REQ-UI-002 | `TestREQ_UI_002_PortWrongType` | `ui.port` of wrong type (`"9180"`, `9180.5`, `null`); catches: string coerced with Atoi |
+| TC-UI-010 | REQ-UI-002 | `TestREQ_UI_002_SectionAndRemoteWrongType` | `ui` not an object, `ui.remote` not a boolean; catches: silently default |
+| TC-UI-011 | REQ-UI-002 | `TestREQ_UI_002_PortEqualToSecondPrinterPort` | `ui.port` equal to the 2nd printer's port; catches: only `Printers[0]` compared |
+| TC-UI-012 | REQ-UI-003 | `TestREQ_UI_003_BrowserCommandIsRundll32` | Browser command is rundll32 FileProtocolHandler; catches: `cmd /c start` (breaks on `&`, XP) |
+| TC-UI-013 | REQ-UI-003 | `TestREQ_UI_003_OpenerGetsURLAfterBind` | Opener called once with the UI URL after the bind; catches: opened before listen / with 0.0.0.0 |
+| TC-UI-014 | REQ-UI-003 | `TestREQ_UI_003_NoConfigEmptyList` | No config: empty list, pages work; catches: nil Config dereference (500/panic) |
+| TC-UI-015 | REQ-UI-003 | `TestREQ_UI_003_FirstSaveWritesConfigAndStartsReceivers` | First printer saved from the empty start writes the file and starts receivers; catches: save refused because no file exists |
+| TC-UI-016 | REQ-UI-003 | MANUAL:admin | Real browser opens on double-click |
+| TC-UI-017 | REQ-UI-004 | `TestREQ_UI_004_RemotePasswordLength` | remote with 7-char password / no password refused, 8 accepted; catches: `>8` instead of `>=8` |
+| TC-UI-018 | REQ-UI-004 | `TestREQ_UI_004_ShortPasswordAcceptedWhenRemoteOff` | Remote off: short password accepted; catches: password checked regardless of remote |
+| TC-UI-019 | REQ-UI-004 | `TestREQ_UI_004_RemoteBindsAllInterfaces` | Remote binds 0.0.0.0; catches: still loopback |
+| TC-UI-020 | REQ-UI-004 | `TestREQ_UI_004_RemoteNeedsBasicAuth` | Remote: missing / wrong Basic auth → 401 on pages, API and assets; catches: only pages protected; user name not checked |
+| TC-UI-021 | REQ-UI-004 | `TestREQ_UI_004_RemoteNeedsBasicAuth` | Remote: `admin` / password passes |
+| TC-UI-022 | REQ-UI-004 | `TestREQ_UI_004_LocalAsksNoPassword` | Remote off: no auth asked; catches: auth required whenever a password exists |
+| TC-UI-023 | REQ-UI-005 | `TestREQ_UI_005_StatusShowsEveryPrinter` | Status shows each printer's fields, UI and log paths; catches: only first printer rendered; no-allow shown empty |
+| TC-UI-024 | REQ-UI-006 | `TestREQ_UI_006_AddEditRemoveWithPlainForms` | Printers page forms are plain POST forms with the token; catches: JS-only buttons |
+| TC-UI-025 | REQ-UI-006 | `TestREQ_UI_006_AddEditRemoveWithPlainForms` | Add a printer with a plain form post; catches: CRLF / blank line kept as items |
+| TC-UI-026 | REQ-UI-006 | `TestREQ_UI_006_AddEditRemoveWithPlainForms` | Edit a printer; catches: typed name ignored for the select |
+| TC-UI-027 | REQ-UI-006 | `TestREQ_UI_006_AddEditRemoveWithPlainForms` | Remove a printer; catches: wrong index removed |
+| TC-UI-028 | REQ-UI-007 | `TestREQ_UI_007_BadPortRefusedNextToField` | Port 70000 refused next to the field, nothing written; catches: write-then-validate; message far from field |
+| TC-UI-029 | REQ-UI-007 | `TestREQ_UI_007_DuplicatePortRefused` | Duplicate port refused (F-003 rule); catches: form-only validation that misses loader rules |
+| TC-UI-030 | REQ-UI-007 | `TestREQ_UI_007_BadAllowItemRefused` | Bad allow item refused (F-004 rule); catches: allow textarea not validated |
+| TC-UI-031 | REQ-UI-007 | `TestREQ_UI_007_BadPortRefusedNextToField` | Message names the real config path, not the temp file; catches: temp path leaked |
+| TC-UI-032 | REQ-UI-007 | `TestREQ_UI_007_RemovingLastPrinterRefused` | Removing the last printer refused; catches: empty list written (F-003 0 printers) |
+| TC-UI-033 | REQ-UI-008 | `TestREQ_UI_008_KeepsUnknownKeysAtomically` | Unknown keys kept at every level, also on the edited entry; catches: struct re-marshal drops unknown keys |
+| TC-UI-034 | REQ-UI-008 | `TestREQ_UI_008_KeepsUnknownKeysAtomically` | Atomic write leaves no temp file; catches: temp file name left behind |
+| TC-UI-035 | REQ-UI-009 | `TestREQ_UI_009_RestartsOnlyChangedListeners` | First Apply starts every printer |
+| TC-UI-036 | REQ-UI-009 | `TestREQ_UI_009_RestartsOnlyChangedListeners` | Port change restarts only that printer; catches: restart-all on any save |
+| TC-UI-037 | REQ-UI-009 | `TestREQ_UI_009_RestartsOnlyChangedListeners` | Windows printer change and allow change each restart only theirs; name-only change restarts none; catches: allow / printer not in the change key; name in it |
+| TC-UI-038 | REQ-UI-009 | `TestREQ_UI_009_RestartsOnlyChangedListeners` | Added printer started, removed printer stopped, others untouched; catches: index-keyed diff shifts after removal |
+| TC-UI-039 | REQ-UI-009 | pending: cli / reload wiring test (build step) | Job in flight while its listener restarts is still printed; catches: listener closed hard |
+| TC-UI-040 | REQ-UI-010 | `TestREQ_UI_010_TestPageSendsThroughPort` | Test page sends a job with the printer name and time through the port; catches: written to spooler directly, bypassing the port |
+| TC-UI-041 | REQ-UI-010 | `TestREQ_UI_010_UnknownPrinterSendsNothing` | Unknown printer name sends nothing; catches: first printer used as fallback |
+| TC-UI-042 | REQ-UI-010 | MANUAL:admin | Test page prints on a real printer |
+| TC-UI-043 | REQ-UI-011 | `TestREQ_UI_011_LastTwoHundredLinesNewestLast` | Last 200 of 250 lines, newest last; catches: 201 lines / reversed order |
+| TC-UI-044 | REQ-UI-011 | `TestREQ_UI_011_MissingLogFile` | Missing log file → page 200; catches: 500 on ENOENT |
+| TC-UI-045 | REQ-UI-012 | `TestREQ_UI_012_SettingsSaveLogAndUI` | Settings save log and UI fields; catches: ui section not written |
+| TC-UI-046 | REQ-UI-012 | `TestREQ_UI_012_PasswordNeverSentBack` | Password never sent back (page, API); catches: `value="{{.Password}}"` |
+| TC-UI-047 | REQ-UI-012 | `TestREQ_UI_012_SettingsSaveLogAndUI` | UI change says restart is needed; catches: hint always shown / silent |
+| TC-UI-048 | REQ-UI-012 | `TestREQ_UI_012_BadKeepDaysRefused` | keep_days 0 refused, nothing written; catches: settings bypass loader |
+| TC-UI-049 | REQ-UI-012 | `TestREQ_UI_012_EmptyPasswordKeepsStored` | Empty password field keeps the stored password; catches: password wiped |
+| TC-UI-050 | REQ-UI-013 | `TestREQ_UI_013_PostWithoutTokenIs403` | POST without / with wrong token → 403, nothing written; catches: token only on /printers |
+| TC-UI-051 | REQ-UI-013 | `TestREQ_UI_013_PostWithoutTokenIs403` | API write without the header → 403; catches: API exempt |
+| TC-UI-052 | REQ-UI-013 | `TestREQ_UI_013_TokenRandomPerProcess` | Token random per process; catches: constant token |
+| TC-UI-053 | REQ-UI-014 | `TestREQ_UI_014_HostileValuesEscaped` | Hostile printer name / Windows printer escaped; catches: text/template used |
+| TC-UI-054 | REQ-UI-014 | `TestREQ_UI_014_HostileValuesEscaped` | Hostile log line escaped; catches: log printed raw |
+| TC-UI-055 | REQ-UI-014 | `TestREQ_UI_014_EchoedInputEscaped` | Hostile request value echoed back escaped; catches: input echoed raw in `value=` |
+| TC-UI-056 | REQ-UI-015 | `TestREQ_UI_015_BaseCSSOnlyIE6` | base.css has no CSS IE6 lacks; catches: modern CSS creeping into base |
+| TC-UI-057 | REQ-UI-015 | `TestREQ_UI_015_ModernCSSInsideSupportsGrid` | modern.css is one `@supports (display: grid)` block; catches: a rule outside the block |
+| TC-UI-058 | REQ-UI-015 | `TestREQ_UI_015_ScriptsAreModulesAndAssetsLinked` | Every script tag is `type="module"`; templates link base.css, modern.css, app.js; catches: classic `<script src>` run by IE |
+| TC-UI-059 | REQ-UI-016 | `TestREQ_UI_016_StreamSendsNewLines` | SSE stream sends one event per new log line; catches: whole file resent / polling only |
+| TC-UI-060 | REQ-UI-016 | MANUAL:admin | With JS: live log, status counters refresh, forms save without reload via the form URLs; catches: JS-only endpoint |
+| TC-UI-061 | REQ-UI-017 | `TestREQ_UI_017_GeneratedAssetsMatchStatic` | Generated asset file matches `static/`; catches: stale generated file |
+| TC-UI-062 | REQ-UI-018 | `TestREQ_UI_018_ReadEndpoints` | GET API status / printers / installed; catches: HTML returned to API |
+| TC-UI-063 | REQ-UI-018 | `TestREQ_UI_018_PostPrintersValidatesAndSaves` | POST /api/printers invalid → 400 error + field, nothing written; catches: 200 with error text |
+| TC-UI-064 | REQ-UI-018 | `TestREQ_UI_018_PostPrintersValidatesAndSaves` | POST /api/printers valid saves |
+| TC-UI-065 | REQ-UI-018 | `TestREQ_UI_018_LogLinesParam` | `/api/log?lines=N`; catches: `<=1000` off by one; default all |
+| TC-UI-066 | REQ-UI-018 | `TestREQ_UI_018_PostTestSendsJob` | POST /api/test sends the job |
+| TC-UI-067 | REQ-UI-019 | `scripts/harness check core-go110` | UI code builds and tests pass on Go 1.10.8; catches: embed / io/fs used |
+| TC-UI-068 | REQ-UI-020 | MANUAL:admin | IE6 on XP: every page and form works, base look; catches: modern-only markup |
+| TC-UI-069 | REQ-UI-020 | MANUAL:admin | IE8 on XP: same as IE6 |
+| TC-UI-070 | REQ-UI-020 | MANUAL:admin | Current browser: modern look and live updates |
+| TC-UI-071 | REQ-UI-003 | `TestREQ_UI_003_OpenerFailureKeepsUI` | Opener failure does not stop the UI; catches: browser failure aborts start-up |
+| TC-UI-072 | REQ-UI-006 | `TestREQ_UI_006_BadIndexWritesNothing` | Edit / remove with a bad index writes nothing; catches: index unchecked (panic / last entry removed) |
+| TC-UI-073 | REQ-UI-008 | `TestREQ_UI_008_WriteFailureKeepsOriginal` | Write failure keeps the original file; catches: original truncated before the new one exists |
+| TC-UI-074 | REQ-UI-009 | `TestREQ_UI_009_FailedStartKeepsOthersAndRetries` | A listener that fails to start does not stop the others and is retried; catches: failed listener recorded as running |
+| TC-UI-075 | REQ-UI-016 | `TestREQ_UI_016_StreamNeedsAuthWhenRemote` | SSE stream needs Basic auth with remote; catches: stream endpoint left open |
+| TC-UI-076 | REQ-UI-013 | `TestREQ_UI_013_GetNeverChangesState` | State never changes through GET, even with the token; catches: token checked only on POST but FormValue read on GET (img-tag CSRF) |
+| TC-UI-077 | REQ-UI-012 | `TestREQ_UI_012_SettingsValidateUI` | Settings validate `ui.*` like loading; catches: settings bypass the ui rules → service exits 2 on next start |
+| TC-UI-078 | REQ-UI-007 | `TestREQ_UI_007_PrinterPortEqualToUIPortRefused` | Printer port equal to ui.port refused; catches: printer form ignores the ui port |
+| TC-UI-079 | REQ-UI-012 | `TestREQ_UI_012_UntickedRemoteWritesFalse` | Unticking remote writes `ui.remote` false; catches: absent checkbox never written |
+| TC-UI-080 | REQ-UI-008 | `TestREQ_UI_008_ConcurrentSavesLeaveValidFile` | Concurrent saves leave a valid file; catches: shared temp name / unguarded state |
+| TC-UI-081 | REQ-UI-012 | `TestREQ_UI_012_SettingsShowCurrentValues` | Settings page shows current values; catches: inputs rendered empty |
+| TC-UI-082 | REQ-UI-009 | `TestREQ_UI_009_ApplyFailureShownAfterSave` | Save written but listener start fails → error on the page; catches: error swallowed |
+| TC-UI-083 | REQ-UI-001 | pending: cli / reload wiring test (build step) | CLI exit codes and no-args start; catches: config error not wired to exit 2 |
+| TC-UI-084 | REQ-UI-014 | `TestREQ_UI_014_AppJSInsertsTextOnly` | app.js inserts server data as text only; catches: live log XSS in the browser |
+| TC-UI-085 | REQ-UI-006 | `TestREQ_UI_006_InstalledFailureKeepsTypedName` | Installed-printer lookup failure keeps the form usable; catches: page 500 when the spooler is down |
+| TC-UI-086 | REQ-UI-010 | `TestREQ_UI_010_NothingListeningShowsError` | Test job to a port with nothing listening; catches: hang / 500 |
+| TC-UI-087 | REQ-UI-004 | `TestREQ_UI_004_PasswordLengthInCharacters` | Password length counted in characters; catches: `len()` counts bytes |
+| TC-UI-088 | REQ-UI-015 | `TestREQ_UI_015_NoInlineHandlers` | No inline handlers or `javascript:` URLs in templates; catches: function reachable only through JS |
+| TC-UI-089 | REQ-UI-011 | `TestREQ_UI_011_RefreshWithoutJS` | Log page has a refresh that works without JS; catches: refresh only through JS |

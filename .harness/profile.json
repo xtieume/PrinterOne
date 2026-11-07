@@ -27,7 +27,8 @@
         "cmd/*",
         "internal/*",
         "go.mod",
-        "go.sum"
+        "go.sum",
+        "static/*"
       ],
       "tests_template": [
         "-run",

@@ -233,6 +233,8 @@
         "REQ-UI-017",
         "REQ-UI-018",
         "REQ-UI-019",
+        "REQ-UI-021",
+        "REQ-UI-022",
         "REQ-UI-020"
       ],
       "allowed_paths": [
