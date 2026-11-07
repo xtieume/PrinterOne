@@ -153,37 +153,77 @@ func loadFile(path string) (*Config, error) {
 		return nil, fieldError(path, "version")
 	}
 	var entries []json.RawMessage
-	if len(root["printers"]) == 0 || json.Unmarshal(root["printers"], &entries) != nil || len(entries) != 1 {
+	if len(root["printers"]) == 0 || json.Unmarshal(root["printers"], &entries) != nil || len(entries) < 1 || len(entries) > 32 {
 		return nil, fieldError(path, "printers")
 	}
-	var entry map[string]json.RawMessage
-	if json.Unmarshal(entries[0], &entry) != nil || entry == nil {
-		return nil, fieldError(path, "printers[0]")
-	}
-	var printer string
-	if len(entry["printer"]) == 0 || json.Unmarshal(entry["printer"], &printer) != nil || printer == "" {
-		return nil, fieldError(path, "printers[0].printer")
-	}
-	name := "default"
-	if raw, ok := entry["name"]; ok {
-		var n string
-		if json.Unmarshal(raw, &n) == nil && n != "" {
-			name = n
+	printers := make([]Printer, 0, len(entries))
+	var cfgAllow []allow.List
+	ports, names := make(map[int]bool), make(map[string]bool)
+	for i, raw := range entries {
+		prefix := fmt.Sprintf("printers[%d]", i)
+		var entry map[string]json.RawMessage
+		if json.Unmarshal(raw, &entry) != nil || entry == nil {
+			return nil, fieldError(path, prefix)
+		}
+		var printer string
+		if len(entry["printer"]) == 0 || json.Unmarshal(entry["printer"], &printer) != nil || printer == "" {
+			return nil, fieldError(path, prefix+".printer")
+		}
+		name := "default"
+		if len(entries) > 1 {
+			name = fmt.Sprintf("printer%d", i+1)
+		}
+		if value, ok := entry["name"]; ok {
+			var n string
+			if json.Unmarshal(value, &n) == nil && n != "" {
+				name = n
+			}
+		}
+		port := DefaultPort
+		if value, ok := entry["port"]; ok {
+			n, e := strconv.Atoi(string(value))
+			if e != nil || n < 1 || n > 65535 {
+				return nil, fieldError(path, prefix+".port")
+			}
+			port = n
+		}
+		printers = append(printers, Printer{Name: name, Printer: printer, Port: port})
+		if allowRaw, ok := entry["allow"]; ok {
+			var rawItems []json.RawMessage
+			if json.Unmarshal(allowRaw, &rawItems) != nil || len(rawItems) == 0 {
+				return nil, fieldError(path, prefix+".allow")
+			}
+			items := make([]string, len(rawItems))
+			for j, value := range rawItems {
+				if json.Unmarshal(value, &items[j]) != nil {
+					return nil, fieldError(path, fmt.Sprintf("%s.allow[%d]", prefix, j))
+				}
+			}
+			list, bad, e := allow.Parse(items)
+			if e != nil {
+				return nil, fieldError(path, fmt.Sprintf("%s.allow[%d]", prefix, bad))
+			}
+			cfgAllow = append(cfgAllow, list)
+		} else {
+			cfgAllow = append(cfgAllow, nil)
 		}
 	}
-	port := DefaultPort
-	if raw, ok := entry["port"]; ok {
-		v, err := strconv.Atoi(string(raw))
-		if err != nil || v < 1 || v > 65535 {
-			return nil, fieldError(path, "printers[0].port")
+	// Validate every entry's fields before reporting a duplicate across entries.
+	for i, p := range printers {
+		if ports[p.Port] {
+			return nil, fieldError(path, fmt.Sprintf("printers[%d].port", i))
 		}
-		port = v
+		ports[p.Port] = true
+		if names[p.Name] {
+			return nil, fieldError(path, fmt.Sprintf("printers[%d].name", i))
+		}
+		names[p.Name] = true
 	}
 	lg, err := parseLog(root, path)
 	if err != nil {
 		return nil, err
 	}
-	return &Config{Path: path, Log: lg, Printers: []Printer{{Name: name, Printer: printer, Port: port}}}, nil
+	return &Config{Path: path, Log: lg, Printers: printers, Allow: cfgAllow}, nil
 }
 
 func fileError(path string, err error) error { return &Error{Msg: fmt.Sprintf("%s: %v", path, err)} }

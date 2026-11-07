@@ -5,9 +5,11 @@ package cli
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/xtieume/PrinterOne/internal/core/buildinfo"
 	"github.com/xtieume/PrinterOne/internal/core/config"
@@ -223,7 +225,6 @@ func serve(path *string, env Env) int {
 		fmt.Fprintln(env.Stderr, err)
 		return 2
 	}
-	printer := cfg.Printers[0]
 	logDir := cfg.Log.Dir
 	if logDir == "" {
 		logDir = logfile.DefaultDir(dataDir)
@@ -237,54 +238,85 @@ func serve(path *string, env Env) int {
 	if env.Edition == "legacy" {
 		slots = receiver.SlotsLegacy
 	}
-	s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(printer.Port), Printer: printer.Printer,
-		Slots: slots, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: output,
-		Print: func(name string, data []byte) error { return spool.Print(env.Spool, printer.Printer, name, data) }}
-	if err := s.Listen(); err != nil {
-		var busy *receiver.PortBusyError
-		if e, ok := err.(*receiver.PortBusyError); ok {
-			busy = e
+	pool := receiver.NewSlotPool(slots)
+	locks := make(map[string]*sync.Mutex)
+	servers := make([]*receiver.Server, 0, len(cfg.Printers))
+	for i, printer := range cfg.Printers {
+		printer := printer
+		lock := locks[printer.Printer]
+		if lock == nil {
+			lock = &sync.Mutex{}
+			locks[printer.Printer] = lock
 		}
-		if busy != nil {
-			fmt.Fprintln(env.Stderr, busy)
+		var allowFn func(net.IP) bool
+		if i < len(cfg.Allow) && cfg.Allow[i] != nil {
+			allowFn = cfg.Allow[i].Allows
+		}
+		s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(printer.Port), Printer: printer.Printer, Slots: slots, Pool: pool,
+			MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: output, Allow: allowFn, PrintLock: lock,
+			Print: func(name string, data []byte) error { return spool.Print(env.Spool, printer.Printer, name, data) }}
+		if err := s.Listen(); err != nil {
+			for _, previous := range servers {
+				previous.CloseListener()
+			}
+			var busy *receiver.PortBusyError
+			if e, ok := err.(*receiver.PortBusyError); ok {
+				busy = e
+			}
+			if busy != nil {
+				fmt.Fprintln(env.Stderr, busy)
+				return 1
+			}
+			fmt.Fprintln(env.Stderr, err)
 			return 1
 		}
-		fmt.Fprintln(env.Stderr, err)
-		return 1
+		servers = append(servers, s)
 	}
-	addr := s.ListenAddr()
-	fmt.Fprintf(output, "Listening on %s\nPrinter: %s\n", addr, printer.Printer)
-	if env.Ready != nil {
-		env.Ready(addr)
+	for i, s := range servers {
+		p := cfg.Printers[i]
+		fmt.Fprintf(output, "Listening on %s\nPrinter: %s\n", s.ListenAddr(), p.Printer)
+		fmt.Fprintf(output, "%s -> %s on %s allow: %s\n", p.Name, p.Printer, s.ListenAddr(), allowText(cfg, i))
 	}
-	done := make(chan struct{})
-	var serveErr error
-	go func() { serveErr = s.Serve(); close(done) }()
+	if env.Ready != nil && len(servers) > 0 {
+		env.Ready(servers[0].ListenAddr())
+	}
+	dones := make([]chan struct{}, len(servers))
+	for i, s := range servers {
+		dones[i] = make(chan struct{})
+		go func(s *receiver.Server, done chan struct{}) { s.Serve(); close(done) }(s, dones[i])
+	}
+	waitAll := func() {
+		for i, s := range servers {
+			s.Shutdown()
+			<-dones[i]
+		}
+	}
 	if env.Interrupt == nil {
-		<-done
-		if serveErr != nil {
-			fmt.Fprintln(env.Stderr, serveErr)
-			return 1
+		for _, done := range dones {
+			<-done
 		}
 		return 0
 	}
 	select {
 	case <-env.Interrupt:
-	case <-done:
-		if serveErr != nil {
-			fmt.Fprintln(env.Stderr, serveErr)
-			return 1
-		}
+	case <-dones[0]:
 		return 0
 	}
 	stopped := make(chan struct{})
-	go func() { s.Shutdown(); <-done; close(stopped) }()
+	go func() { waitAll(); close(stopped) }()
 	select {
 	case <-stopped:
 		return 0
 	case <-env.Interrupt:
 		return 1
 	}
+}
+
+func allowText(cfg *config.Config, i int) string {
+	if i < len(cfg.Allow) {
+		return cfg.Allow[i].String()
+	}
+	return "all"
 }
 
 type stdoutIgnoringErrors struct{ w io.Writer }

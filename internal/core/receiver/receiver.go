@@ -25,17 +25,18 @@ const (
 type PrintFunc func(docName string, data []byte) error
 
 type Server struct {
-	Addr     string
-	Listener net.Listener
-	Printer  string
-	Print    PrintFunc
-	MaxBytes int64
-	Idle     time.Duration
-	Slots    int
-	Pool     *SlotPool // shared receive slots (F-003); nil: Slots of its own
-	Log      io.Writer
-	Now      func() time.Time
-	Allow    func(net.IP) bool // F-004: false → closed before any Read, logged `0B … rejected: not allowed`; nil: all
+	Addr      string
+	Listener  net.Listener
+	Printer   string
+	Print     PrintFunc
+	MaxBytes  int64
+	Idle      time.Duration
+	Slots     int
+	Pool      *SlotPool // shared receive slots (F-003); nil: Slots of its own
+	PrintLock *sync.Mutex
+	Log       io.Writer
+	Now       func() time.Time
+	Allow     func(net.IP) bool // F-004: false → closed before any Read, logged `0B … rejected: not allowed`; nil: all
 
 	mu           sync.Mutex
 	ln           net.Listener
@@ -51,11 +52,12 @@ type Server struct {
 // docs/specs/2026-11-07-f003-multi-printer.md §2: 8 main / 2 legacy for all ports together). A Server whose Pool
 // is set takes its slots from it and ignores Slots.
 type SlotPool struct {
-	n int
+	n   int
+	sem chan struct{}
 }
 
 // NewSlotPool returns a pool of n receive slots.
-func NewSlotPool(n int) *SlotPool { return &SlotPool{n: n} }
+func NewSlotPool(n int) *SlotPool { return &SlotPool{n: n, sem: make(chan struct{}, n)} }
 
 type PortBusyError struct{ Port int }
 
@@ -97,6 +99,16 @@ func (s *Server) ListenAddr() string {
 	return a
 }
 
+// CloseListener releases a bound listener before Serve has started.
+func (s *Server) CloseListener() {
+	s.mu.Lock()
+	if s.ln != nil {
+		s.ln.Close()
+		s.ln = nil
+	}
+	s.mu.Unlock()
+}
+
 type printJob struct {
 	conn    string
 	ip      string
@@ -120,7 +132,13 @@ func (s *Server) Serve() error {
 	go func() {
 		defer printer.Done()
 		for j := range jobs {
+			if s.PrintLock != nil {
+				s.PrintLock.Lock()
+			}
 			err := s.Print("PrinterOne job from "+j.ip, j.data)
+			if s.PrintLock != nil {
+				s.PrintLock.Unlock()
+			}
 			result := "printed"
 			if err != nil {
 				if e, ok := err.(*spool.Error); ok {
@@ -138,16 +156,25 @@ func (s *Server) Serve() error {
 		limit = SlotsMain
 	}
 	sem := make(chan struct{}, limit)
+	if s.Pool != nil {
+		sem = s.Pool.sem
+	}
 	backoff := 5 * time.Millisecond
 	for {
-		select {
-		case sem <- struct{}{}:
-		case <-stop:
-			goto acceptedDone
+		preacquired := false
+		if s.Allow == nil && s.Pool == nil {
+			select {
+			case sem <- struct{}{}:
+				preacquired = true
+			case <-stop:
+				goto acceptedDone
+			}
 		}
 		c, err := ln.Accept()
 		if err != nil {
-			<-sem
+			if preacquired {
+				<-sem
+			}
 			select {
 			case <-stop:
 				goto acceptedDone
@@ -161,6 +188,26 @@ func (s *Server) Serve() error {
 			continue
 		}
 		backoff = 5 * time.Millisecond
+		if s.Allow != nil {
+			remote, _ := c.RemoteAddr().(*net.TCPAddr)
+			var ip net.IP
+			if remote != nil {
+				ip = remote.IP
+			}
+			if !s.Allow(ip) {
+				s.log(c.RemoteAddr().String(), 0, "rejected: not allowed")
+				c.Close()
+				continue
+			}
+		}
+		if !preacquired {
+			select {
+			case sem <- struct{}{}:
+			case <-stop:
+				c.Close()
+				goto acceptedDone
+			}
+		}
 		s.mu.Lock()
 		if s.stopping {
 			s.mu.Unlock()

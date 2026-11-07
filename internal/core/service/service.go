@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xtieume/PrinterOne/internal/core/config"
@@ -522,30 +524,57 @@ func runSession(o RunOptions, session Session, d Deps) {
 		session.Report(Stopped, 2)
 		return
 	}
-	p := cfg.Printers[0]
 	slots := receiver.SlotsMain
 	if o.Edition == "legacy" {
 		slots = receiver.SlotsLegacy
 	}
-	s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(p.Port), Printer: p.Printer, Slots: slots, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: log,
-		Print: func(name string, data []byte) error { return spool.Print(o.Spool, p.Printer, name, data) }}
-	if err = s.Listen(); err != nil {
-		fmt.Fprintln(log, err)
-		session.Report(Stopped, 1)
-		return
+	pool := receiver.NewSlotPool(slots)
+	locks := make(map[string]*sync.Mutex)
+	servers := make([]*receiver.Server, 0, len(cfg.Printers))
+	for i, p := range cfg.Printers {
+		p := p
+		lock := locks[p.Printer]
+		if lock == nil {
+			lock = &sync.Mutex{}
+			locks[p.Printer] = lock
+		}
+		var allowFn func(net.IP) bool
+		if i < len(cfg.Allow) && cfg.Allow[i] != nil {
+			allowFn = cfg.Allow[i].Allows
+		}
+		s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(p.Port), Printer: p.Printer, Slots: slots, Pool: pool, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: log, Allow: allowFn, PrintLock: lock,
+			Print: func(name string, data []byte) error { return spool.Print(o.Spool, p.Printer, name, data) }}
+		if err = s.Listen(); err != nil {
+			for _, previous := range servers {
+				previous.CloseListener()
+			}
+			fmt.Fprintln(log, err)
+			session.Report(Stopped, 1)
+			return
+		}
+		servers = append(servers, s)
 	}
-	addr := s.ListenAddr()
-	fmt.Fprintf(log, "Listening on %s\nPrinter: %s\n", addr, p.Printer)
+	for i, s := range servers {
+		p := cfg.Printers[i]
+		fmt.Fprintf(log, "Listening on %s\nPrinter: %s\n", s.ListenAddr(), p.Printer)
+		fmt.Fprintf(log, "%s -> %s on %s allow: %s\n", p.Name, p.Printer, s.ListenAddr(), allowText(cfg, i))
+	}
+	addr := servers[0].ListenAddr()
 	if o.Ready != nil {
 		o.Ready(addr)
 	}
 	session.Report(Running, 0)
-	done := make(chan error, 1)
-	go func() { done <- s.Serve() }()
+	done := make([]chan struct{}, len(servers))
+	for i, s := range servers {
+		done[i] = make(chan struct{})
+		go func(s *receiver.Server, d chan struct{}) { s.Serve(); close(d) }(s, done[i])
+	}
 	select {
 	case <-session.Controls():
 		session.Report(StopPending, 0)
-		s.Shutdown()
+		for _, s := range servers {
+			go s.Shutdown()
+		}
 		newTicker := d.NewTicker
 		if newTicker == nil {
 			newTicker = func(d time.Duration) (<-chan time.Time, func()) { t := time.NewTicker(d); return t.C, t.Stop }
@@ -555,7 +584,7 @@ func runSession(o RunOptions, session Session, d Deps) {
 		checkpoint := uint32(1)
 		for {
 			select {
-			case <-done:
+			case <-allDone(done):
 				goto drained
 			case <-ticks:
 				checkpoint++
@@ -566,14 +595,27 @@ func runSession(o RunOptions, session Session, d Deps) {
 		}
 	drained:
 		session.Report(Stopped, 0)
-	case err := <-done:
-		if err != nil {
-			fmt.Fprintln(log, err)
-			session.Report(Stopped, 1)
-		} else {
-			session.Report(Stopped, 0)
-		}
+	case <-allDone(done):
+		session.Report(Stopped, 0)
 	}
+}
+
+func allDone(done []chan struct{}) <-chan struct{} {
+	all := make(chan struct{})
+	go func() {
+		for _, d := range done {
+			<-d
+		}
+		close(all)
+	}()
+	return all
+}
+
+func allowText(cfg *config.Config, i int) string {
+	if i < len(cfg.Allow) {
+		return cfg.Allow[i].String()
+	}
+	return "all"
 }
 
 func absoluteLogPath(path string) string {
