@@ -13,6 +13,13 @@ A comprehensive TCP network print server with integrated GUI management and syst
 **Copyright (c) 2025 xtieume@gmail.com**  
 **GitHub: https://github.com/xtieume/PrinterOne**
 
+> 🚧 **v2 in progress**: `master` is being rewritten in Go — one `.exe` with no runtime, a main edition for
+> Windows 10/11 and a legacy edition for Windows XP–8, several printers per server, an IP allowlist, central logs
+> and a web UI. Plan: [docs/specs/2026-11-07-go-rewrite-plan.md](docs/specs/2026-11-07-go-rewrite-plan.md).
+> Until v2 ships, use the [v1.0.1 release](https://github.com/xtieume/PrinterOne/releases/tag/v1.0.1); everything
+> below describes v1. Windows XP users can meanwhile try the community Go fork
+> [ashtray01/printerone](https://github.com/ashtray01/printerone).
+
 ![PrinterOne Screenshot](assets/screenshot.png)
 
 ## ✨ Features
@@ -49,10 +56,11 @@ A comprehensive TCP network print server with integrated GUI management and syst
 4. Click "Start Server"
 5. ⚠️ **Important**: If clients can't connect, check firewall settings (see [Troubleshooting](#troubleshooting))
 
-### Option 2: Build from Source
+### Option 2: Build v1 from Source
+The Python v1 source lives at tag `v1.0.1`; `master` now holds the Go rewrite (see above).
 ```bash
-# Clone the repository
-git clone https://github.com/xtieume/PrinterOne.git
+# Clone the repository at the v1 tag
+git clone --branch v1.0.1 https://github.com/xtieume/PrinterOne.git
 cd PrinterOne
 
 # Install dependencies

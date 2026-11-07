@@ -1,0 +1,7 @@
+#!/bin/sh
+# Every agent and person: no push to master or main (CLAUDE.md). Claude's guard.py only covers Claude;
+# this runs for any client once `git config core.hooksPath .githooks` is set.
+if awk '{print $3}' | grep -Eq '^refs/heads/(main|master)$'; then
+  echo >&2 "pre-push: push to master/main is forbidden — push a branch and open a PR (CLAUDE.md)"
+  exit 1
+fi

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Build and test the Go 1.10 subset — internal/core/... and cmd/printerone-legacy — with the Go 1.10.8 toolchain,
+# the last Go that runs on Windows XP. Go 1.10 has no modules, so the repo is copied into a GOPATH inside the
+# container. Extra arguments (e.g. -run TestX) go to `go test`. Run through `scripts/harness check core-go110`.
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+pkg=github.com/xtieume/PrinterOne
+exec docker run --rm --platform linux/amd64 -v "$root:/src:ro" -e "CGO_ENABLED=0" golang:1.10.8 sh -euc '
+  dst=/go/src/'"$pkg"'
+  mkdir -p "$dst"
+  cd /src && tar --exclude=./.git --exclude=./.testcases -cf - . | tar -xf - -C "$dst"
+  cd "$dst"
+  go vet ./internal/core/... ./cmd/printerone-legacy 1>&2
+  GOOS=windows GOARCH=386 go build -o /tmp/printerone-legacy.exe ./cmd/printerone-legacy 1>&2
+  go test -json "$@" ./internal/core/...
+' go110 "$@"
