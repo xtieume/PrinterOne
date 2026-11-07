@@ -185,3 +185,65 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-SVC-040 | REQ-SVC-018 | `scripts/harness check core-go110` | Go 1.10.8 builds and tests the service code; catches: Go 1.11+ API in service code |
 | TC-SVC-041 | REQ-SVC-008 | `TestREQ_SVC_008_StopTimeoutGivesUpAfter30s` | Stop that never completes: uninstall gives up after 30 s; catches: waits forever; deletes a running service |
 | TC-SVC-042 | REQ-SVC-010 | `TestREQ_SVC_010_MainLimitUnderSCM` | Main edition limit (8) under SCM; catches: legacy limit 2 always used under the service |
+| TC-LOGF-001 | REQ-LOGF-001 | `TestREQ_LOGF_001_ServeWritesToDataDirLogs` | `serve` without `log` writes to `<data dir>/logs`, creating it; catches: folder not created; file written to cwd or exe folder |
+| TC-LOGF-002 | REQ-LOGF-001 | `TestREQ_LOGF_001_DefaultDirAndPath` | `DefaultDir` / `Path` names; catches: different folder or file name |
+| TC-LOGF-003 | REQ-LOGF-001 | `TestREQ_LOGF_001_StartCreatesNestedFolder` | `Start` creates a folder two levels deep; catches: `os.Mkdir` instead of `MkdirAll` |
+| TC-LOGF-004 | REQ-LOGF-001 | `TestREQ_LOGF_001_KeepDaysOnlyKeepsDefaultFolder` | A `log` section with only `keep_days` keeps the default folder; catches: presence of `log` replaces the folder with something non-empty |
+| TC-LOGF-005 | REQ-LOGF-002 | `TestREQ_LOGF_002_ServeWritesToLogDir` | `serve` with `log.dir` writes there, not to the data dir; catches: `log.dir` parsed but ignored; folder not created for a configured dir |
+| TC-LOGF-006 | REQ-LOGF-002 | `TestREQ_LOGF_002_LoadReturnsConfiguredDir` | `Load` returns the configured folder; catches: default not applied when `log` present |
+| TC-LOGF-007 | REQ-LOGF-002 | `TestREQ_LOGF_002_RelativeDirResolvesAgainstConfigFolder` | Relative `log.dir` resolves against the config folder (assumption); catches: resolved against the cwd (System32 for a service) |
+| TC-LOGF-008 | REQ-LOGF-003 | `TestREQ_LOGF_003_MissingLogSectionIsValid` | Missing `log` is valid with defaults; catches: `log` required; KeepDays left 0 |
+| TC-LOGF-009 | REQ-LOGF-003 | `TestREQ_LOGF_003_InvalidLogFieldNamesField/TC-LOGF-009` | Empty `log.dir`; catches: empty string accepted as cwd |
+| TC-LOGF-010 | REQ-LOGF-003 | `TestREQ_LOGF_003_InvalidLogFieldNamesField/TC-LOGF-010` | `log.dir` of wrong type; catches: number silently ignored |
+| TC-LOGF-011 | REQ-LOGF-003 | `TestREQ_LOGF_003_InvalidLogFieldNamesField/TC-LOGF-011` | `keep_days` 0; catches: 0 treated as "absent → 30" |
+| TC-LOGF-012 | REQ-LOGF-003 | `TestREQ_LOGF_003_InvalidLogFieldNamesField/TC-LOGF-012` | `keep_days` 3651; catches: upper bound off by one (`<= 3651`) or missing |
+| TC-LOGF-013 | REQ-LOGF-003 | `TestREQ_LOGF_003_KeepDaysBoundsValid` | `keep_days` 1 and 3650 valid; catches: bounds exclusive |
+| TC-LOGF-014 | REQ-LOGF-003 | `TestREQ_LOGF_003_InvalidLogFieldNamesField/TC-LOGF-014` | `keep_days` 1.5; catches: float truncated to 1 |
+| TC-LOGF-015 | REQ-LOGF-003 | `TestREQ_LOGF_003_InvalidLogFieldNamesField/TC-LOGF-015` | `keep_days` as string `"30"`; catches: string parsed with Atoi after unquoting |
+| TC-LOGF-016 | REQ-LOGF-003 | `TestREQ_LOGF_003_InvalidLogFieldNamesField/TC-LOGF-016` | `log` not an object; catches: non-object silently treated as absent |
+| TC-LOGF-017 | REQ-LOGF-003 | `TestREQ_LOGF_003_ServeInvalidKeepDaysExits2` | `serve` with an invalid `keep_days` exits 2; catches: log section validated only by `logs`, not by `serve` |
+| TC-LOGF-018 | REQ-LOGF-004 | `TestREQ_LOGF_004_SameLinesInFileAndConsole` | Same lines in file and console; catches: console replaced by the file (or file only start-up lines) |
+| TC-LOGF-019 | REQ-LOGF-004 | `TestREQ_LOGF_004_ServeAppendsToExistingFile` | `serve` appends to an existing file; catches: file truncated on open |
+| TC-LOGF-020 | REQ-LOGF-004 | `TestREQ_LOGF_004_WritesAppendInOrder` | Writer appends writes in order; catches: overwrite at offset 0; short count returned |
+| TC-LOGF-021 | REQ-LOGF-005 | `TestREQ_LOGF_005_ServiceRunWritesToLogDir` | `service run` writes to `log.dir`; catches: service still uses `LogPath(DataDir)` |
+| TC-LOGF-022 | REQ-LOGF-005 | `TestREQ_LOGF_005_InvalidKeepDaysLoggedToDefaultFolder` | `service run` with an invalid log section logs the error to the default folder; catches: error written to the folder of an invalid log section (lost when that folder is bad) |
+| TC-LOGF-023 | REQ-LOGF-006 | `TestREQ_LOGF_006_TwoWritersNeverSplitLines` | Two writers, concurrent, whole lines; catches: one shared offset without O_APPEND; buffered writes split across calls |
+| TC-LOGF-024 | REQ-LOGF-006 | `TestREQ_LOGF_006_FileReadableWhileServing` | File readable while `serve` runs; catches: writer fails while a reader holds the file |
+| TC-LOGF-025 | REQ-LOGF-006 | MANUAL:admin — `TestREQ_LOGF_006_WindowsTypeReadsLogWhileServing` (windows-e2e CI run URL) | Windows: `type` reads the log while `serve` runs (e2e, tags e2e,windows); catches: file opened without FILE_SHARE_READ |
+| TC-LOGF-026 | REQ-LOGF-007 | `TestREQ_LOGF_007_LocalMidnightRotates` | Local midnight rotates; catches: no rotation; rotated file named with the new day |
+| TC-LOGF-027 | REQ-LOGF-007 | `TestREQ_LOGF_007_SameLocalDayAcrossUTCMidnightDoesNotRotate` | Same local day across UTC midnight does not rotate; catches: day compared in UTC |
+| TC-LOGF-028 | REQ-LOGF-007 | `TestREQ_LOGF_007_GapOfDaysNamesOldLinesDate` | Gap of several days names the old lines' date; catches: name computed as "yesterday" (now − 1 day) |
+| TC-LOGF-029 | REQ-LOGF-007 | `TestREQ_LOGF_007_RestartOnLaterDayRotatesOldFile` | Restart on a later day rotates the old file; catches: day tracked only in memory (old file grows forever) |
+| TC-LOGF-030 | REQ-LOGF-007 | `TestREQ_LOGF_007_RestartSameDayDoesNotRotate` | Restart on the same day does not rotate; catches: rotation at every start-up |
+| TC-LOGF-031 | REQ-LOGF-007 | `TestREQ_LOGF_007_TwoWritersCrossMidnightRotateOnce` | Two writers cross midnight: one rotation, no line lost; catches: second writer renames the fresh file again (loses `a2` or makes `printerone-2026-11-08.log`) |
+| TC-LOGF-032 | REQ-LOGF-007 | `TestREQ_LOGF_007_FailedRenameKeepsLogging` | Failed rename keeps logging; catches: line dropped when the rename fails |
+| TC-LOGF-033 | REQ-LOGF-008 | `TestREQ_LOGF_008_StartCleansWithDefault30Days` | Start-up clean-up with default 30 days; catches: `<=` instead of `<`; age from mtime (both fresh) |
+| TC-LOGF-034 | REQ-LOGF-008 | `TestREQ_LOGF_008_OtherFilesNeverTouched` | Other files never touched; catches: glob `printerone-*` deletes non-dates; mtime-based age |
+| TC-LOGF-035 | REQ-LOGF-008 | `TestREQ_LOGF_008_CleanUpAlsoAtRotation` | Clean-up also runs at rotation; catches: clean-up only at start-up |
+| TC-LOGF-036 | REQ-LOGF-008 | `TestREQ_LOGF_008_ServeUsesConfiguredKeepDays` | `serve` passes `keep_days` to the clean-up; catches: config keep_days ignored (default 30 used) |
+| TC-LOGF-037 | REQ-LOGF-009 | `TestREQ_LOGF_009_FailingWritesWarnOnce` | Failing writes warn once with path and OS error; catches: warning per line; error returned to the caller |
+| TC-LOGF-038 | REQ-LOGF-009 | `TestREQ_LOGF_009_ServeKeepsServingWhenFolderCannotBeCreated` | `serve` keeps serving when the folder cannot be created; catches: io.MultiWriter stops console on file error; exit on log failure |
+| TC-LOGF-039 | REQ-LOGF-009 | `TestREQ_LOGF_009_NilWarnDoesNotPanic` | Nil Warn (service) does not panic; catches: nil Warn dereferenced |
+| TC-LOGF-040 | REQ-LOGF-010 | `TestREQ_LOGF_010_LoadLogWithoutConfigReturnsDefaults`, `TestREQ_LOGF_010_LogsWithoutConfigPrintsDefaultPath` | `logs` with no config prints the default path; catches: non-zero when config missing |
+| TC-LOGF-041 | REQ-LOGF-010 | `TestREQ_LOGF_010_LogsWithConfigLogDir` | `logs --config` with `log.dir`; catches: log.dir ignored by `logs` |
+| TC-LOGF-042 | REQ-LOGF-010 | `TestREQ_LOGF_010_LoadLogIgnoresPrinters`, `TestREQ_LOGF_010_LogsIgnoresInvalidPrinters` | `logs` ignores an invalid printer list; catches: full `config.Load` used |
+| TC-LOGF-043 | REQ-LOGF-010 | `TestREQ_LOGF_010_LogsInvalidLogSectionExits2` | `logs` with an invalid log section exits 2; catches: log section not validated by `logs` |
+| TC-LOGF-044 | REQ-LOGF-010 | `TestREQ_LOGF_010_LogsFollowsLookupOrder` | `logs` follows the lookup order (exe folder); catches: lookup skipped, default always printed |
+| TC-LOGF-045 | REQ-LOGF-010 | `TestREQ_LOGF_010_LogsBadArgumentsPrintUsage` | `logs` bad arguments; catches: extra args accepted |
+| TC-LOGF-046 | REQ-LOGF-010 | `TestREQ_LOGF_010_LogsMissingConfigFileExits2` | `logs --config <missing>` exits 2 (assumption: as `serve`, F-001 REQ-CFG-001); catches: missing named file falls back to the default path |
+| TC-LOGF-047 | REQ-LOGF-011 | `TestREQ_LOGF_011_ServeFirstLineNamesLogFile` | `serve` first line names the log; catches: path printed after `Listening on`, or relative |
+| TC-LOGF-048 | REQ-LOGF-011 | `TestREQ_LOGF_011_ServiceRunFirstLineNamesLogFile` | `service run` first line names the log; catches: only `serve` updated |
+| TC-LOGF-049 | REQ-LOGF-012 | `scripts/harness check core-go110` | Log code builds and tests with Go 1.10.8; catches: Go ≥1.11 API in logfile/config/cli |
+| TC-LOGF-050 | REQ-LOGF-005 | `TestREQ_LOGF_005_ServiceRunWritesToLogDir` | `service run` connection lines reach `log.dir`; catches: only start-up lines redirected, receiver still on the default log |
+| TC-LOGF-051 | REQ-LOGF-007 | `TestREQ_LOGF_007_TwoWritersRotateAtSameInstant` | Two writers rotate at the same instant: one rotation, no line lost; catches: check-then-rename race renames the fresh file again |
+| TC-LOGF-052 | REQ-LOGF-006 | `TestREQ_LOGF_006_TwoProcessesNeverSplitLines` | Two processes, whole lines; catches: in-process mutex + seek-to-end instead of O_APPEND |
+| TC-LOGF-053 | REQ-LOGF-007 | `TestREQ_LOGF_007_RotationWithOpenReaderLosesNothing` | Rotation while a reader holds the file loses nothing; catches: rename failure (Windows, open reader) drops the line or truncates |
+| TC-LOGF-054 | REQ-LOGF-010 | `TestREQ_LOGF_010_LogsPrintsAbsolutePathForRelativeDir` | `logs` prints an absolute path for a relative `log.dir`; catches: relative path printed as written |
+| TC-LOGF-055 | REQ-LOGF-005 | `TestREQ_LOGF_005_PrinterErrorLoggedInValidLogDir` | Printer config error with a valid `log.dir` is logged in `log.dir` (assumption); catches: error sent to the default folder while `printerone logs` points at `<tmp>/S` |
+| TC-SVC-043 | REQ-SVC-014 | `TestREQ_SVC_014_InstallRemovalChecksRuleExistence` | review finding, 2026-11-07 |
+| TC-SVC-044 | REQ-SVC-006 | `TestREQ_SVC_006_StoppedAfterStartFailsImmediatelyWithExitCode` | review finding, 2026-11-07 |
+| TC-SVC-045 | REQ-SVC-006 | `TestREQ_SVC_006_StartPendingServiceWaitsThenRestarts` | review finding, 2026-11-07 |
+| TC-SVC-046 | REQ-SVC-008 | `TestREQ_SVC_008_StopPendingUninstallWaitsWithoutResendingStop` | review finding, 2026-11-07 |
+| TC-SVC-047 | REQ-SVC-015 | `TestREQ_SVC_015_XPRemovalMatchesPortNumber` | review finding, 2026-11-07 |
+| TC-SVC-048 | REQ-SVC-014 | `TestREQ_SVC_014_RemovalSkipsDeleteWhenShowFails` | review finding, 2026-11-07 |
+| TC-SVC-049 | REQ-SVC-007 | `TestREQ_SVC_007_RollbackStopsCreatedServiceBeforeDelete` | review finding, 2026-11-07 |

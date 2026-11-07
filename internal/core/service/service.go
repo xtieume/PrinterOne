@@ -70,7 +70,7 @@ type SCM interface {
 	Start(name string) error
 	Stop(name string) error // sends SERVICE_CONTROL_STOP; does not wait
 	Delete(name string) error
-	State(name string) (State, error)
+	State(name string) (State, uint32, uint32, error)
 }
 
 // Runner runs a program (netsh) and returns its combined output; err is non-nil when it exits non-zero.
@@ -101,12 +101,13 @@ var ErrNotService = errors.New("not started by the service control manager")
 
 // Deps is everything the service commands take from the machine. System() returns the real ones.
 type Deps struct {
-	SCM      SCM
-	Netsh    Runner
-	OSMajor  int // Windows major version: 5 is XP (netsh firewall), 6 and later use netsh advfirewall
-	Dispatch Dispatcher
-	Sleep    func(time.Duration) // time.Sleep when nil
-	Now      func() time.Time    // time.Now when nil
+	SCM       SCM
+	Netsh     Runner
+	OSMajor   int // Windows major version: 5 is XP (netsh firewall), 6 and later use netsh advfirewall
+	Dispatch  Dispatcher
+	Sleep     func(time.Duration) // time.Sleep when nil
+	Now       func() time.Time    // time.Now when nil
+	NewTicker func(time.Duration) (<-chan time.Time, func())
 }
 
 // InstallOptions is a validated `service install`.
@@ -139,9 +140,6 @@ func RequireAdmin(d Deps) error {
 func Install(o InstallOptions, d Deps) error {
 	if err := RequireAdmin(d); err != nil {
 		return err
-	}
-	if d.SCM == nil {
-		return &Error{Code: 1, Msg: "service control manager is unavailable"}
 	}
 	var err error
 	exe := o.ExePath
@@ -182,10 +180,12 @@ func Install(o InstallOptions, d Deps) error {
 		oldPath := serviceConfigPath(old.BinaryPath)
 		if oldPath != "" {
 			if oldCfg, loadErr := config.Load(config.Lookup{Flag: oldPath}); loadErr == nil {
+				oldPorts := make([]int, 0, len(oldCfg.Printers))
 				for _, p := range oldCfg.Printers {
-					if _, e := runNetsh(d, "firewall", "delete", "portopening", "protocol=TCP", "port="+strconv.Itoa(p.Port)); e != nil && !noRulesMatch(e, nil) {
-						return rollbackInstall(d, created, nil, serviceError(e))
-					}
+					oldPorts = append(oldPorts, p.Port)
+				}
+				if e := removeXPRules(d, oldPorts); e != nil {
+					return rollbackInstall(d, created, nil, serviceError(e))
 				}
 			}
 		}
@@ -197,7 +197,10 @@ func Install(o InstallOptions, d Deps) error {
 			}
 		}
 	} else {
-		if _, err = runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName); err != nil && !noRulesMatch(err, nil) {
+		if ruleExists(d) {
+			_, err = runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName)
+		}
+		if err != nil {
 			return rollbackInstall(d, created, nil, serviceError(err))
 		}
 		ports := make([]string, 0, len(o.Ports))
@@ -242,13 +245,15 @@ func Uninstall(d Deps) (warnings []string, err error) {
 				}
 			}
 		}
-		state, e := d.SCM.State(Name)
+		state, _, _, e := d.SCM.State(Name)
 		if e != nil {
 			return warnings, serviceError(e)
 		}
 		if state != Stopped {
-			if e = d.SCM.Stop(Name); e != nil {
-				return warnings, serviceError(e)
+			if state != StopPending {
+				if e = d.SCM.Stop(Name); e != nil {
+					return warnings, serviceError(e)
+				}
 			}
 			if e = waitForState(d, Stopped, WaitTimeout); e != nil {
 				return warnings, serviceError(e)
@@ -259,15 +264,41 @@ func Uninstall(d Deps) (warnings []string, err error) {
 		}
 	}
 	if d.OSMajor == 5 {
-		for _, p := range ports {
-			if _, e := runNetsh(d, "firewall", "delete", "portopening", "protocol=TCP", "port="+strconv.Itoa(p)); e != nil && !noRulesMatch(e, nil) {
-				return warnings, serviceError(e)
-			}
+		if e := removeXPRules(d, ports); e != nil {
+			return warnings, serviceError(e)
 		}
-	} else if _, e := runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName); e != nil && !noRulesMatch(e, nil) {
-		return warnings, serviceError(e)
+	} else if ruleExists(d) {
+		if _, e := runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName); e != nil {
+			return warnings, serviceError(e)
+		}
 	}
 	return warnings, nil
+}
+
+func removeXPRules(d Deps, ports []int) error {
+	out, err := runNetsh(d, "firewall", "show", "portopening")
+	if err != nil {
+		return nil
+	}
+	for _, p := range ports {
+		if portListed(string(out), p) {
+			if _, err = runNetsh(d, "firewall", "delete", "portopening", "protocol=TCP", "port="+strconv.Itoa(p)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func portListed(output string, port int) bool {
+	want := strconv.Itoa(port)
+	for _, field := range strings.Fields(output) {
+		field = strings.Trim(field, "|,:;()[]")
+		if field == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Run hands the process to the SCM and serves the configured printer until a stop or shutdown request (§2.3).
@@ -276,7 +307,7 @@ func Run(o RunOptions, d Deps) error {
 	if d.Dispatch == nil {
 		return &Error{Code: 2, Msg: "service run is started by Windows; use serve to run in a console"}
 	}
-	err := d.Dispatch(Name, func(session Session) { runSession(o, session) })
+	err := d.Dispatch(Name, func(session Session) { runSession(o, session, d) })
 	if err == ErrNotService {
 		return &Error{Code: 2, Msg: "service run is started by Windows; use serve to run in a console"}
 	}
@@ -305,9 +336,6 @@ func runNetsh(d Deps, args ...string) ([]byte, error) {
 	}
 	out, err := runner("netsh", args...)
 	if err != nil {
-		if noRulesMatch(err, out) {
-			return out, nil
-		}
 		if strings.TrimSpace(string(out)) != "" {
 			return out, errors.New(strings.TrimSpace(string(out)))
 		}
@@ -315,18 +343,18 @@ func runNetsh(d Deps, args ...string) ([]byte, error) {
 	return out, err
 }
 
-func noRulesMatch(err error, out []byte) bool {
-	s := strings.ToLower(string(out) + " " + err.Error())
-	return strings.Contains(s, "no rules match")
+func ruleExists(d Deps) bool {
+	_, err := runNetsh(d, "advfirewall", "firewall", "show", "rule", "name="+RuleName)
+	return err == nil
 }
 
 func removeFirewall(d Deps, ports []int) {
 	if d.OSMajor == 5 {
-		for _, p := range ports {
-			runNetsh(d, "firewall", "delete", "portopening", "protocol=TCP", "port="+strconv.Itoa(p))
-		}
+		_ = removeXPRules(d, ports)
 	} else {
-		runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName)
+		if ruleExists(d) {
+			runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName)
+		}
 	}
 }
 
@@ -335,6 +363,12 @@ func rollbackInstall(d Deps, created bool, cleanup func(), cause error) error {
 		cleanup()
 	}
 	if created {
+		if state, _, _, e := d.SCM.State(Name); e == nil && state != Stopped {
+			if state != StopPending {
+				d.SCM.Stop(Name)
+			}
+			waitForState(d, Stopped, WaitTimeout)
+		}
 		d.SCM.Delete(Name)
 	}
 	return cause
@@ -349,11 +383,21 @@ func sleep(d Deps, duration time.Duration) {
 }
 
 func startAndWait(d Deps) error {
-	state, err := d.SCM.State(Name)
+	state, _, _, err := d.SCM.State(Name)
 	if err != nil {
 		return err
 	}
 	if state == Running {
+		if err = d.SCM.Stop(Name); err != nil {
+			return err
+		}
+		if err = waitForState(d, Stopped, WaitTimeout); err != nil {
+			return err
+		}
+	} else if state == StartPending {
+		if err = waitForState(d, Running, WaitTimeout); err != nil {
+			return err
+		}
 		if err = d.SCM.Stop(Name); err != nil {
 			return err
 		}
@@ -373,12 +417,15 @@ func waitForState(d Deps, want State, timeout time.Duration) error {
 		start = d.Now()
 	}
 	for {
-		state, err := d.SCM.State(Name)
+		state, win32, specific, err := d.SCM.State(Name)
 		if err != nil {
 			return err
 		}
 		if state == want {
 			return nil
+		}
+		if want == Running && state == Stopped {
+			return &Error{Code: 1, Msg: fmt.Sprintf("service stopped while waiting for running (Win32 exit code %d, service-specific exit code %d)", win32, specific)}
 		}
 		now := time.Now()
 		if d.Now != nil {
@@ -451,7 +498,7 @@ func openLog(o RunOptions) (io.Writer, func()) {
 	return &logWriter{f}, func() { f.Close() }
 }
 
-func runSession(o RunOptions, session Session) {
+func runSession(o RunOptions, session Session, d Deps) {
 	log, closeLog := openLog(o)
 	defer closeLog()
 	session.Report(StartPending, 0)
@@ -485,7 +532,25 @@ func runSession(o RunOptions, session Session) {
 	case <-session.Controls():
 		session.Report(StopPending, 0)
 		s.Shutdown()
-		<-done
+		newTicker := d.NewTicker
+		if newTicker == nil {
+			newTicker = func(d time.Duration) (<-chan time.Time, func()) { t := time.NewTicker(d); return t.C, t.Stop }
+		}
+		ticks, stopTicker := newTicker(2 * time.Second)
+		defer stopTicker()
+		checkpoint := uint32(1)
+		for {
+			select {
+			case <-done:
+				goto drained
+			case <-ticks:
+				checkpoint++
+				if p, ok := session.(interface{ ReportPending(uint32) }); ok {
+					p.ReportPending(checkpoint)
+				}
+			}
+		}
+	drained:
 		session.Report(Stopped, 0)
 	case err := <-done:
 		if err != nil {

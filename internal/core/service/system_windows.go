@@ -4,6 +4,7 @@
 package service
 
 import (
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,6 +31,14 @@ var (
 	procSetServiceStatus       = advapi32.NewProc("SetServiceStatus")
 	procRtlGetVersion          = ntdll.NewProc("RtlGetVersion")
 )
+
+func init() {
+	for _, p := range []*syscall.LazyProc{procOpenSCManager, procCreateService, procOpenService, procChangeServiceConfig,
+		procChangeServiceConfig2, procQueryServiceConfig, procStartService, procControlService, procQueryServiceStatus,
+		procDeleteService, procCloseServiceHandle, procStartServiceDispatcher, procRegisterServiceHandler, procSetServiceStatus, procRtlGetVersion} {
+		_ = p.Find()
+	}
+}
 
 const (
 	scManagerConnect                    = 0x0001
@@ -85,17 +94,24 @@ type osVersionInfo struct {
 
 type windowsSCM struct{}
 
+func callProc(p *syscall.LazyProc, args ...uintptr) (uintptr, uintptr, error) {
+	if err := p.Find(); err != nil {
+		return 0, 0, err
+	}
+	return p.Call(args...)
+}
+
 func System() Deps {
 	return Deps{SCM: windowsSCM{}, Netsh: Netsh, OSMajor: osMajorVersion(), Dispatch: windowsDispatch,
 		Sleep: time.Sleep, Now: time.Now}
 }
 
 func (windowsSCM) IsAdmin() bool {
-	h, _, e := procOpenSCManager.Call(0, 0, scManagerAllAccess)
+	h, _, e := callProc(procOpenSCManager, 0, 0, scManagerAllAccess)
 	if h == 0 {
 		return false
 	}
-	procCloseServiceHandle.Call(h)
+	callProc(procCloseServiceHandle, h)
 	_ = e
 	return true
 }
@@ -134,14 +150,24 @@ func (windowsSCM) Create(name string, s Settings) error {
 	if err != nil {
 		return err
 	}
-	h, _, callErr := procCreateService.Call(m, uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(dn)), serviceAllAccess,
+	h, _, callErr := callProc(procCreateService, m, uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(dn)), serviceAllAccess,
 		serviceWin32OwnProcess, uintptr(s.StartType), serviceErrorNormal, uintptr(unsafe.Pointer(bin)), 0, 0, 0,
 		uintptr(unsafe.Pointer(acct)), 0)
+	runtime.KeepAlive(n)
+	runtime.KeepAlive(dn)
+	runtime.KeepAlive(bin)
+	runtime.KeepAlive(acct)
 	if h == 0 {
 		return winServiceError("CreateService", callErr)
 	}
 	defer closeHandle(h)
-	return setDescription(h, s.Description)
+	if err = setDescription(h, s.Description); err != nil {
+		if r, _, e := callProc(procDeleteService, h); r == 0 {
+			return winServiceError("DeleteService", e)
+		}
+		return err
+	}
+	return nil
 }
 
 func (windowsSCM) Update(name string, s Settings) error {
@@ -158,16 +184,22 @@ func (windowsSCM) Update(name string, s Settings) error {
 	if err != nil {
 		return err
 	}
-	if r, _, e := procChangeServiceConfig.Call(h, ^uintptr(0), uintptr(s.StartType), ^uintptr(0), uintptr(unsafe.Pointer(bin)), 0, 0, 0, uintptr(unsafe.Pointer(acct)), 0, 0); r == 0 {
+	if r, _, e := callProc(procChangeServiceConfig, h, ^uintptr(0), uintptr(s.StartType), ^uintptr(0), uintptr(unsafe.Pointer(bin)), 0, 0, 0, uintptr(unsafe.Pointer(acct)), 0, 0); r == 0 {
+		runtime.KeepAlive(bin)
+		runtime.KeepAlive(acct)
 		return winServiceError("ChangeServiceConfig", e)
 	}
+	runtime.KeepAlive(bin)
+	runtime.KeepAlive(acct)
 	dn, err := wide(s.DisplayName)
 	if err != nil {
 		return err
 	}
-	if r, _, e := procChangeServiceConfig.Call(h, ^uintptr(0), ^uintptr(0), ^uintptr(0), 0, 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(dn))); r == 0 {
+	if r, _, e := callProc(procChangeServiceConfig, h, ^uintptr(0), ^uintptr(0), ^uintptr(0), 0, 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(dn))); r == 0 {
+		runtime.KeepAlive(dn)
 		return winServiceError("ChangeServiceConfig", e)
 	}
+	runtime.KeepAlive(dn)
 	return setDescription(h, s.Description)
 }
 
@@ -178,14 +210,19 @@ func (windowsSCM) Config(name string) (Settings, error) {
 	}
 	defer closeHandle(h)
 	var needed uint32
-	procQueryServiceConfig.Call(h, 0, 0, uintptr(unsafe.Pointer(&needed)))
+	callProc(procQueryServiceConfig, h, 0, 0, uintptr(unsafe.Pointer(&needed)))
+	runtime.KeepAlive(&needed)
 	if needed == 0 {
 		return Settings{}, winServiceError("QueryServiceConfig", syscall.GetLastError())
 	}
 	buf := make([]byte, needed)
-	if r, _, e := procQueryServiceConfig.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&needed))); r == 0 {
+	if r, _, e := callProc(procQueryServiceConfig, h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&needed))); r == 0 {
+		runtime.KeepAlive(buf)
+		runtime.KeepAlive(&needed)
 		return Settings{}, winServiceError("QueryServiceConfig", e)
 	}
+	runtime.KeepAlive(buf)
+	runtime.KeepAlive(&needed)
 	c := (*queryServiceConfig)(unsafe.Pointer(&buf[0]))
 	return Settings{BinaryPath: utf16String(c.binaryPath), DisplayName: utf16String(c.displayName), StartType: c.startType, Account: utf16String(c.startName)}, nil
 }
@@ -196,7 +233,7 @@ func (windowsSCM) Start(name string) error {
 		return err
 	}
 	defer closeHandle(h)
-	if r, _, e := procStartService.Call(h, 0, 0); r == 0 {
+	if r, _, e := callProc(procStartService, h, 0, 0); r == 0 {
 		return winServiceError("StartService", e)
 	}
 	return nil
@@ -209,9 +246,11 @@ func (windowsSCM) Stop(name string) error {
 	}
 	defer closeHandle(h)
 	var s serviceStatus
-	if r, _, e := procControlService.Call(h, serviceControlStop, uintptr(unsafe.Pointer(&s))); r == 0 {
+	if r, _, e := callProc(procControlService, h, serviceControlStop, uintptr(unsafe.Pointer(&s))); r == 0 {
+		runtime.KeepAlive(&s)
 		return winServiceError("ControlService", e)
 	}
+	runtime.KeepAlive(&s)
 	return nil
 }
 
@@ -221,27 +260,29 @@ func (windowsSCM) Delete(name string) error {
 		return err
 	}
 	defer closeHandle(h)
-	if r, _, e := procDeleteService.Call(h); r == 0 {
+	if r, _, e := callProc(procDeleteService, h); r == 0 {
 		return winServiceError("DeleteService", e)
 	}
 	return nil
 }
 
-func (windowsSCM) State(name string) (State, error) {
+func (windowsSCM) State(name string) (State, uint32, uint32, error) {
 	h, err := openService(name, serviceQueryStatus)
 	if err != nil {
-		return 0, err
+		return 0, 0, 0, err
 	}
 	defer closeHandle(h)
 	var s serviceStatus
-	if r, _, e := procQueryServiceStatus.Call(h, uintptr(unsafe.Pointer(&s))); r == 0 {
-		return 0, winServiceError("QueryServiceStatus", e)
+	if r, _, e := callProc(procQueryServiceStatus, h, uintptr(unsafe.Pointer(&s))); r == 0 {
+		runtime.KeepAlive(&s)
+		return 0, 0, 0, winServiceError("QueryServiceStatus", e)
 	}
-	return State(s.currentState), nil
+	runtime.KeepAlive(&s)
+	return State(s.currentState), s.win32ExitCode, s.serviceSpecificExitCode, nil
 }
 
 func openManager(access uintptr) (uintptr, error) {
-	h, _, e := procOpenSCManager.Call(0, 0, access)
+	h, _, e := callProc(procOpenSCManager, 0, 0, access)
 	if h == 0 {
 		return 0, winServiceError("OpenSCManager", e)
 	}
@@ -257,22 +298,27 @@ func openService(name string, access uintptr) (uintptr, error) {
 	if err != nil {
 		return 0, err
 	}
-	h, _, e := procOpenService.Call(m, uintptr(unsafe.Pointer(n)), access)
+	h, _, e := callProc(procOpenService, m, uintptr(unsafe.Pointer(n)), access)
+	runtime.KeepAlive(n)
 	if h == 0 {
 		return 0, winServiceError("OpenService", e)
 	}
 	return h, nil
 }
-func closeHandle(h uintptr) { procCloseServiceHandle.Call(h) }
+func closeHandle(h uintptr) { callProc(procCloseServiceHandle, h) }
 func setDescription(h uintptr, text string) error {
 	p, err := wide(text)
 	if err != nil {
 		return err
 	}
 	d := serviceDescription{description: p}
-	if r, _, e := procChangeServiceConfig2.Call(h, serviceConfigDesc, uintptr(unsafe.Pointer(&d))); r == 0 {
+	if r, _, e := callProc(procChangeServiceConfig2, h, serviceConfigDesc, uintptr(unsafe.Pointer(&d))); r == 0 {
+		runtime.KeepAlive(&d)
+		runtime.KeepAlive(p)
 		return winServiceError("ChangeServiceConfig2", e)
 	}
+	runtime.KeepAlive(&d)
+	runtime.KeepAlive(p)
 	return nil
 }
 func wide(s string) (*uint16, error) {
@@ -310,7 +356,8 @@ func isWinErr(err error, code uintptr) bool {
 
 func osMajorVersion() int {
 	v := osVersionInfo{size: uint32(unsafe.Sizeof(osVersionInfo{}))}
-	r, _, _ := procRtlGetVersion.Call(uintptr(unsafe.Pointer(&v)))
+	r, _, _ := callProc(procRtlGetVersion, uintptr(unsafe.Pointer(&v)))
+	runtime.KeepAlive(&v)
 	if r != 0 {
 		return 0
 	}
@@ -328,6 +375,10 @@ func (s *windowsSession) Report(state State, code uint32) {
 	if state == Running {
 		status.controlsAccepted = serviceAcceptStop | serviceAcceptShutdown
 	}
+	if state == StartPending {
+		status.waitHint = 30000
+		status.checkPoint = 1
+	}
 	if state == StopPending {
 		status.waitHint = 30000
 		status.checkPoint = 1
@@ -336,7 +387,13 @@ func (s *windowsSession) Report(state State, code uint32) {
 		status.win32ExitCode = errorServiceSpecificError
 		status.serviceSpecificExitCode = code
 	}
-	procSetServiceStatus.Call(s.handle, uintptr(unsafe.Pointer(&status)))
+	callProc(procSetServiceStatus, s.handle, uintptr(unsafe.Pointer(&status)))
+	runtime.KeepAlive(&status)
+}
+func (s *windowsSession) ReportPending(checkpoint uint32) {
+	status := serviceStatus{serviceType: serviceWin32OwnProcess, currentState: serviceStopPending, waitHint: 5000, checkPoint: checkpoint}
+	callProc(procSetServiceStatus, s.handle, uintptr(unsafe.Pointer(&status)))
+	runtime.KeepAlive(&status)
 }
 
 var activeSession *windowsSession
@@ -350,7 +407,7 @@ func windowsDispatch(name string, main func(Session)) error {
 	entry[0].proc = syscall.NewCallback(func(argc uintptr, argv uintptr) uintptr {
 		s := activeSession
 		handlerName, _ := wide(name)
-		h, _, _ := procRegisterServiceHandler.Call(uintptr(unsafe.Pointer(handlerName)), syscall.NewCallback(func(control, eventType, eventData, context uintptr) uintptr {
+		h, _, _ := callProc(procRegisterServiceHandler, uintptr(unsafe.Pointer(handlerName)), syscall.NewCallback(func(control, eventType, eventData, context uintptr) uintptr {
 			if control == serviceControlStop {
 				s.controls <- ControlStop
 				return 0
@@ -359,15 +416,21 @@ func windowsDispatch(name string, main func(Session)) error {
 				s.controls <- ControlShutdown
 				return 0
 			}
+			if control == 4 {
+				return 0
+			} // SERVICE_CONTROL_INTERROGATE
 			return 120 // ERROR_CALL_NOT_IMPLEMENTED
 		}), 0)
+		runtime.KeepAlive(handlerName)
 		s.handle = h
 		main(s)
 		return 0
 	})
 	s := &windowsSession{controls: make(chan Control, 2)}
 	activeSession = s
-	r, _, e := procStartServiceDispatcher.Call(uintptr(unsafe.Pointer(&entry[0])))
+	r, _, e := callProc(procStartServiceDispatcher, uintptr(unsafe.Pointer(&entry[0])))
+	runtime.KeepAlive(entry)
+	runtime.KeepAlive(n)
 	activeSession = nil
 	if r == 0 {
 		if isErrno(e, errorFailedServiceControllerConnect) {

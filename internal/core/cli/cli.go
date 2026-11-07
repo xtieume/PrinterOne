@@ -73,6 +73,8 @@ func Run(args []string, env Env) int {
 		return 0
 	case "service":
 		return serviceCommand(args[1:], env)
+	case "logs":
+		return logsCommand(args[1:], env)
 	default:
 		return usage(env)
 	}
@@ -164,6 +166,10 @@ func serviceCommand(args []string, env Env) int {
 		return usage(env)
 	}
 }
+
+// logsCommand is `printerone logs [--config p]`: prints the absolute path of the current log file, exit 0
+// (spec docs/specs/2026-11-07-f002-logs.md §2).
+func logsCommand(args []string, env Env) int { return 0 }
 
 func isWindowsAbsolute(path string) bool {
 	return len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')

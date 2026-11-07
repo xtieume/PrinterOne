@@ -1,6 +1,7 @@
 package spool
 
 import (
+	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -19,6 +20,13 @@ var (
 	procClosePrinter     = winspool.NewProc("ClosePrinter")
 	procEnumPrinters     = winspool.NewProc("EnumPrintersW")
 )
+
+func init() {
+	for _, p := range []*syscall.LazyProc{procOpenPrinter, procStartDocPrinter, procStartPagePrinter, procWritePrinter,
+		procEndPagePrinter, procEndDocPrinter, procAbortPrinter, procClosePrinter, procEnumPrinters} {
+		_ = p.Find()
+	}
+}
 
 const (
 	enumLocal       = 0x00000002 // PRINTER_ENUM_LOCAL
@@ -43,6 +51,13 @@ type printerInfo4 struct {
 func System() API { return winAPI{} }
 
 type winAPI struct{}
+
+func callProc(p *syscall.LazyProc, args ...uintptr) (uintptr, uintptr, error) {
+	if err := p.Find(); err != nil {
+		return 0, 0, err
+	}
+	return p.Call(args...)
+}
 
 // winError turns the GetLastError value a LazyProc.Call returns into *Error; Errno.Error() is
 // the FormatMessage text. A zero Errno (success with a zero return value) keeps the call name.
@@ -74,7 +89,9 @@ func (winAPI) OpenPrinter(name string) (Handle, error) {
 		return 0, err
 	}
 	var h Handle
-	r1, _, e := procOpenPrinter.Call(uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&h)), 0)
+	r1, _, e := callProc(procOpenPrinter, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&h)), 0)
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(&h)
 	if r1 == 0 {
 		return 0, winError("OpenPrinter", e)
 	}
@@ -91,7 +108,10 @@ func (winAPI) StartDocPrinter(h Handle, docName, datatype string) error {
 		return err
 	}
 	info := docInfo1{pDocName: dn, pDatatype: dt}
-	r1, _, e := procStartDocPrinter.Call(uintptr(h), 1, uintptr(unsafe.Pointer(&info)))
+	r1, _, e := callProc(procStartDocPrinter, uintptr(h), 1, uintptr(unsafe.Pointer(&info)))
+	runtime.KeepAlive(&info)
+	runtime.KeepAlive(dn)
+	runtime.KeepAlive(dt)
 	if r1 == 0 {
 		return winError("StartDocPrinter", e)
 	}
@@ -100,7 +120,7 @@ func (winAPI) StartDocPrinter(h Handle, docName, datatype string) error {
 
 // handleProc wraps the BOOL winspool calls that take only a handle.
 func handleProc(p *syscall.LazyProc, op string, h Handle) error {
-	r1, _, e := p.Call(uintptr(h))
+	r1, _, e := callProc(p, uintptr(h))
 	if r1 == 0 {
 		return winError(op, e)
 	}
@@ -125,7 +145,9 @@ func (winAPI) WritePrinter(h Handle, data []byte) (int, error) {
 		p = uintptr(unsafe.Pointer(&data[0]))
 	}
 	var written uint32
-	r1, _, e := procWritePrinter.Call(uintptr(h), p, uintptr(len(data)), uintptr(unsafe.Pointer(&written)))
+	r1, _, e := callProc(procWritePrinter, uintptr(h), p, uintptr(len(data)), uintptr(unsafe.Pointer(&written)))
+	runtime.KeepAlive(data)
+	runtime.KeepAlive(&written)
 	if r1 == 0 {
 		return 0, winError("WritePrinter", e)
 	}
@@ -135,8 +157,10 @@ func (winAPI) WritePrinter(h Handle, data []byte) (int, error) {
 func (winAPI) EnumPrinters() ([]string, error) {
 	flags := uintptr(enumLocal | enumConnections)
 	var needed, returned uint32
-	r1, _, e := procEnumPrinters.Call(flags, 0, 4, 0, 0,
+	r1, _, e := callProc(procEnumPrinters, flags, 0, 4, 0, 0,
 		uintptr(unsafe.Pointer(&needed)), uintptr(unsafe.Pointer(&returned)))
+	runtime.KeepAlive(&needed)
+	runtime.KeepAlive(&returned)
 	if r1 == 0 && needed == 0 {
 		return nil, winError("EnumPrinters", e)
 	}
@@ -146,8 +170,11 @@ func (winAPI) EnumPrinters() ([]string, error) {
 	var buf []byte
 	for tries := 0; tries < 5; tries++ {
 		buf = make([]byte, needed)
-		r1, _, e = procEnumPrinters.Call(flags, 0, 4, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)),
+		r1, _, e = callProc(procEnumPrinters, flags, 0, 4, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)),
 			uintptr(unsafe.Pointer(&needed)), uintptr(unsafe.Pointer(&returned)))
+		runtime.KeepAlive(buf)
+		runtime.KeepAlive(&needed)
+		runtime.KeepAlive(&returned)
 		if r1 != 0 {
 			break
 		}

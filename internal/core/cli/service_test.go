@@ -131,13 +131,13 @@ func (f *fakeSCM) Delete(name string) error {
 	f.exists = false
 	return nil
 }
-func (f *fakeSCM) State(name string) (service.State, error) {
+func (f *fakeSCM) State(name string) (service.State, uint32, uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.exists {
-		return 0, &service.Error{Code: 1, Msg: "1060 The specified service does not exist as an installed service."}
+		return 0, 0, 0, &service.Error{Code: 1, Msg: "1060 The specified service does not exist as an installed service."}
 	}
-	return f.current(), nil
+	return f.current(), 0, 0, nil
 }
 
 // current advances pending states by the fake clock.
@@ -192,9 +192,11 @@ type netshReply struct {
 }
 
 type fakeNetsh struct {
-	mu    sync.Mutex
-	calls []string                       // "netsh arg arg ..."
-	reply func(args []string) netshReply // nil: defaultNetsh
+	mu         sync.Mutex
+	calls      []string                       // "netsh arg arg ..."
+	reply      func(args []string) netshReply // nil: model based on rule and port state
+	ruleExists bool
+	openPorts  map[int]bool
 }
 
 var errExit1 = errors.New("exit status 1")
@@ -207,7 +209,8 @@ func defaultNetsh(args []string) netshReply {
 }
 
 func noRulesMatch(args []string) netshReply {
-	if len(args) > 2 && args[2] == "delete" {
+	if (len(args) > 2 && (args[2] == "show" || args[2] == "delete")) ||
+		(len(args) > 1 && (args[1] == "show" || args[1] == "delete")) {
 		return netshReply{out: "\r\nNo rules match the specified criteria.\r\n\r\n", err: errExit1}
 	}
 	return netshReply{out: "Ok.\r\n"}
@@ -218,11 +221,53 @@ func (n *fakeNetsh) run(name string, args ...string) ([]byte, error) {
 	defer n.mu.Unlock()
 	n.calls = append(n.calls, name+" "+strings.Join(args, " "))
 	r := n.reply
-	if r == nil {
-		r = defaultNetsh
+	if r != nil {
+		got := r(args)
+		return []byte(got.out), got.err
 	}
-	got := r(args)
+	got := n.statefulReply(args)
 	return []byte(got.out), got.err
+}
+
+func (n *fakeNetsh) statefulReply(args []string) netshReply {
+	if len(args) > 2 && args[0] == "advfirewall" && args[2] == "show" {
+		if n.ruleExists {
+			return netshReply{out: "localized rule listing\r\n"}
+		}
+		return netshReply{out: "localized no rule\r\n", err: errExit1}
+	}
+	if len(args) > 1 && args[0] == "firewall" && args[1] == "show" {
+		var out strings.Builder
+		for port := range n.openPorts {
+			fmt.Fprintf(&out, "Port %d\r\n", port)
+		}
+		return netshReply{out: out.String()}
+	}
+	if len(args) > 2 && args[0] == "advfirewall" {
+		switch args[2] {
+		case "delete":
+			n.ruleExists = false
+		case "add":
+			n.ruleExists = true
+		}
+	}
+	if len(args) > 1 && args[0] == "firewall" && (args[1] == "delete" || args[1] == "add") {
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "port=") {
+				var port int
+				fmt.Sscanf(strings.TrimPrefix(arg, "port="), "%d", &port)
+				if n.openPorts == nil {
+					n.openPorts = make(map[int]bool)
+				}
+				if args[1] == "delete" {
+					delete(n.openPorts, port)
+				} else {
+					n.openPorts[port] = true
+				}
+			}
+		}
+	}
+	return defaultNetsh(args)
 }
 
 func (n *fakeNetsh) list() []string {
@@ -297,6 +342,7 @@ func wantSettings(cfg string) service.Settings {
 }
 
 const (
+	advShow   = "netsh advfirewall firewall show rule name=PrinterOne"
 	advDelete = "netsh advfirewall firewall delete rule name=PrinterOne"
 	advAdd    = "netsh advfirewall firewall add rule name=PrinterOne dir=in action=allow protocol=TCP localport="
 	okInstall = "service PrinterOne installed and running"
@@ -445,6 +491,7 @@ func TestREQ_SVC_004_ExistingServiceUpdated(t *testing.T) {
 func TestREQ_SVC_005_RuleReplacedDeleteThenAdd(t *testing.T) {
 	r := newSvcRig(t)
 	defer r.cleanup()
+	r.netsh.ruleExists = true
 	code := r.run("service", "install", "--config", r.config(9101))
 	calls := r.netsh.list()
 	adds := 0
@@ -512,7 +559,8 @@ func TestREQ_SVC_007_RuleAddFailureRollsBack(t *testing.T) {
 		return noRulesMatch(args)
 	}
 	code := r.run("service", "install", "--config", r.config(9101))
-	if code != 1 || !r.scm.has("delete") || r.scm.has("start") || !strings.Contains(r.stderr.String(), out) {
+	if code != 1 || !r.scm.has("delete") || r.scm.has("start") || !strings.Contains(r.stderr.String(), out) ||
+		indexOf(r.netsh.list(), advShow) < 0 || indexOf(r.netsh.list(), advDelete) >= 0 {
 		t.Fatalf("exit %d; want 1, the created service deleted, no Start, stderr with the netsh output\n%s", code, r.dump())
 	}
 }
@@ -564,6 +612,7 @@ func TestREQ_SVC_008_UninstallStopsWaitsDeletesRemovesRule(t *testing.T) {
 	r := newSvcRig(t)
 	defer r.cleanup()
 	r.scm.exists, r.scm.state, r.scm.settings = true, service.Running, wantSettings(r.config(9101))
+	r.netsh.ruleExists = true
 	code := r.run("service", "uninstall")
 	calls := r.scm.callList()
 	if code != 0 || indexOf(calls, "stop:running") < 0 || indexOf(calls, "delete:stopped") < 0 || indexOf(r.netsh.list(), advDelete) < 0 ||
@@ -592,8 +641,9 @@ func TestREQ_SVC_008_NothingInstalledExits0(t *testing.T) {
 	defer r.cleanup()
 	r.netsh.reply = noRulesMatch
 	code := r.run("service", "uninstall")
-	if code != 0 || strings.TrimSpace(r.stdout.String()) != okRemove || r.scm.has("stop") || r.scm.has("delete") || indexOf(r.netsh.list(), advDelete) < 0 {
-		t.Fatalf("exit %d; want 0, %q, no Stop/Delete, the rule delete still tried\n%s", code, okRemove, r.dump())
+	if code != 0 || strings.TrimSpace(r.stdout.String()) != okRemove || r.scm.has("stop") || r.scm.has("delete") ||
+		indexOf(r.netsh.list(), advShow) < 0 || indexOf(r.netsh.list(), advDelete) >= 0 {
+		t.Fatalf("exit %d; want 0, %q, no Stop/Delete, show reports no rule and delete is skipped\n%s", code, okRemove, r.dump())
 	}
 }
 
@@ -633,17 +683,18 @@ func TestREQ_SVC_014_VistaUsesAdvfirewall(t *testing.T) {
 	r := newSvcRig(t)
 	defer r.cleanup()
 	r.env.Service.OSMajor = 6
+	r.netsh.ruleExists = true
 	cfg := r.config(9101)
 	code := r.run("service", "install", "--config", cfg)
 	install := r.netsh.list()
-	want := []string{advDelete, advAdd + "9101"}
+	want := []string{advShow, advDelete, advAdd + "9101"}
 	if code != 0 || strings.Join(install, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("install exit %d; netsh %q, want exactly %q\n%s", code, install, want, r.dump())
 	}
 	r.netsh.calls = nil
 	code = r.run("service", "uninstall")
-	if got := r.netsh.list(); code != 0 || strings.Join(got, "\n") != advDelete {
-		t.Fatalf("uninstall exit %d; netsh %q, want exactly %q\n%s", code, got, advDelete, r.dump())
+	if got, want := r.netsh.list(), []string{advShow, advDelete}; code != 0 || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("uninstall exit %d; netsh %q, want exactly %q\n%s", code, got, want, r.dump())
 	}
 }
 
@@ -672,10 +723,13 @@ func TestREQ_SVC_015_XPUninstallClosesConfiguredPort(t *testing.T) {
 	defer r.cleanup()
 	r.env.Service.OSMajor = 5
 	r.scm.exists, r.scm.settings = true, wantSettings(r.config(9102))
+	r.netsh.openPorts = map[int]bool{9102: true}
 	code := r.run("service", "uninstall")
+	calls := r.netsh.list()
 	want := "netsh firewall delete portopening protocol=TCP port=9102"
-	if calls := r.netsh.list(); code != 0 || indexOf(calls, want) < 0 {
-		t.Fatalf("exit %d; netsh %q; want %q\n%s", code, calls, want, r.dump())
+	show := indexOf(calls, "netsh firewall show portopening")
+	if code != 0 || show < 0 || indexOf(calls, want) <= show {
+		t.Fatalf("exit %d; netsh %q; want show output containing configured port, then %q\n%s", code, calls, want, r.dump())
 	}
 }
 
@@ -699,12 +753,14 @@ func TestREQ_SVC_015_XPInstallClosesOldPort(t *testing.T) {
 	r.env.Service.OSMajor = 5
 	old := r.writeFile(filepath.Join(r.dir, "old", "config.json"), configJSON(9102))
 	r.scm.exists, r.scm.settings = true, wantSettings(old)
+	r.netsh.openPorts = map[int]bool{9102: true}
 	code := r.run("service", "install", "--config", r.config(9101))
 	calls := r.netsh.list()
+	show := indexOf(calls, "netsh firewall show portopening")
 	del := indexOf(calls, "netsh firewall delete portopening protocol=TCP port=9102")
 	add := indexOf(calls, "netsh firewall add portopening protocol=TCP port=9101 name=PrinterOne")
-	if code != 0 || del < 0 || add < del {
-		t.Fatalf("exit %d; netsh %q; want the old port 9102 closed before 9101 is opened\n%s", code, calls, r.dump())
+	if code != 0 || show < 0 || del < show || add < del {
+		t.Fatalf("exit %d; netsh %q; want XP show, then old port 9102 closed before 9101 is opened\n%s", code, calls, r.dump())
 	}
 }
 
@@ -715,9 +771,17 @@ func TestREQ_SVC_016_NetshFailureReportsOutput(t *testing.T) {
 	r := newSvcRig(t)
 	defer r.cleanup()
 	const out = "An unexpected error occurred."
-	r.netsh.reply = func(args []string) netshReply { return netshReply{out: out + "\r\n", err: errExit1} }
+	r.netsh.reply = func(args []string) netshReply {
+		if len(args) > 2 && args[2] == "show" {
+			return netshReply{out: "localized existing rule"}
+		}
+		if len(args) > 2 && args[2] == "delete" {
+			return netshReply{out: out + "\r\n", err: errExit1}
+		}
+		return netshReply{out: "Ok"}
+	}
 	code := r.run("service", "uninstall")
-	if code != 1 || !strings.Contains(r.stderr.String(), out) {
+	if code != 1 || !strings.Contains(r.stderr.String(), out) || strings.Join(r.netsh.list(), "\n") != strings.Join([]string{advShow, advDelete}, "\n") {
 		t.Fatalf("exit %d; want 1 and stderr with the netsh output %q\n%s", code, out, r.dump())
 	}
 }
@@ -728,7 +792,8 @@ func TestREQ_SVC_016_NoRulesMatchIsNotFailure(t *testing.T) {
 	defer r.cleanup()
 	r.netsh.reply = noRulesMatch
 	code := r.run("service", "install", "--config", r.config(9101))
-	if code != 0 || indexOf(r.netsh.list(), advAdd+"9101") < 0 || strings.TrimSpace(r.stdout.String()) != okInstall {
-		t.Fatalf("exit %d; want 0: `No rules match` on removal is not a failure\n%s", code, r.dump())
+	calls := r.netsh.list()
+	if code != 0 || indexOf(calls, advShow) < 0 || indexOf(calls, advDelete) >= 0 || indexOf(calls, advAdd+"9101") < 0 || strings.TrimSpace(r.stdout.String()) != okInstall {
+		t.Fatalf("exit %d; want 0: show exits non-zero, delete is skipped, and add succeeds\n%s", code, r.dump())
 	}
 }

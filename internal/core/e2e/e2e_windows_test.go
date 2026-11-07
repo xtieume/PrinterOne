@@ -468,3 +468,41 @@ func TestREQ_SVC_017_WindowsServiceInstallPrintUninstall(t *testing.T) {
 		}
 	}
 }
+
+// TC-LOGF-025 (spec docs/specs/2026-11-07-f002-logs.md §2): `type` reads printerone.log while serve runs, and serve
+// keeps logging afterwards.
+func TestREQ_LOGF_006_WindowsTypeReadsLogWhileServing(t *testing.T) {
+	dir, err := ioutil.TempDir("", "printerone-e2e-logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	port := freePort(t)
+	cfg := filepath.Join(dir, "config.json")
+	body := strings.TrimSuffix(configJSON(printerName, port), "}") + `,"log":{"dir":` + strconv.Quote(dir) + `}}`
+	if err := ioutil.WriteFile(cfg, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s := startCmd(t, port, exec.Command(exe, "serve", "--config", cfg))
+	defer s.stop()
+	log := filepath.Join(dir, "printerone.log")
+	out, err := exec.Command("cmd", "/c", "type", log).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "Listening on") {
+		t.Fatalf("type %s: %v\n%s\nstdout %s\nstderr %s", log, err, out, s.stdout.String(), s.stderr.String())
+	}
+	if s.cmd.ProcessState != nil {
+		t.Fatal("serve exited after the log was read")
+	}
+	before := strings.Count(string(out), "\n")
+	c, err := net.DialTimeout("tcp", s.addr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if b, _ := ioutil.ReadFile(log); strings.Count(string(b), "\n") > before {
+			return
+		}
+	}
+	t.Fatalf("no new line in %s after the log was read", log)
+}

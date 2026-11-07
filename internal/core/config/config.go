@@ -21,10 +21,17 @@ type Printer struct {
 	Port    int
 }
 
+// Log is the optional `log` section (spec docs/specs/2026-11-07-f002-logs.md §2).
+type Log struct {
+	Dir      string // absolute log folder; "" when log.dir is absent (then <data dir>\logs)
+	KeepDays int    // 1–3650; 30 when log.keep_days is absent
+}
+
 // Config is a loaded, validated config file.
 type Config struct {
 	Path     string // the file it was read from
 	Printers []Printer
+	Log      Log
 }
 
 // Lookup holds the places Load searches, in order: Flag (the --config value, "" when absent), ExeDir, DataDir.
@@ -76,6 +83,10 @@ func Load(l Lookup) (*Config, error) {
 	}
 	return nil, &Error{Msg: fmt.Sprintf("no config found in %s; run printerone printers", l.DataDir)}
 }
+
+// LoadLog finds the config by the lookup order and reads only its `log` section, for `printerone logs`: the printer
+// list is not validated. With no config file it returns the defaults. An invalid log section is an *Error.
+func LoadLog(l Lookup) (Log, error) { return Log{}, nil }
 
 func loadFile(path string) (*Config, error) {
 	b, err := ioutil.ReadFile(path)
