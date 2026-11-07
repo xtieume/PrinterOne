@@ -1,3 +1,51 @@
 {
-  "features": []
+  "features": [
+    {
+      "id": "F-001",
+      "revision": 1,
+      "behavior": "One printer: RAW jobs over TCP printed through winspool, console and Windows service, v1 config migrated",
+      "spec": "docs/specs/2026-11-07-f001-core.md",
+      "acceptance": [
+        "REQ-CFG-001",
+        "REQ-CFG-002",
+        "REQ-CFG-003",
+        "REQ-CFG-004",
+        "REQ-CFG-005",
+        "REQ-CFG-006",
+        "REQ-RECV-001",
+        "REQ-RECV-002",
+        "REQ-RECV-003",
+        "REQ-RECV-004",
+        "REQ-RECV-005",
+        "REQ-RECV-006",
+        "REQ-SPOOL-001",
+        "REQ-SPOOL-002",
+        "REQ-SPOOL-003",
+        "REQ-CLI-001",
+        "REQ-CLI-002",
+        "REQ-SVC-001",
+        "REQ-SVC-002",
+        "REQ-SVC-003",
+        "REQ-SVC-004",
+        "REQ-LOG-001",
+        "REQ-E2E-001",
+        "REQ-LEG-001"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110",
+        "windows-e2e"
+      ],
+      "risk": "high",
+      "issues": [],
+      "dependencies": []
+    }
+  ]
 }

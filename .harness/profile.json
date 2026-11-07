@@ -122,13 +122,38 @@
         "AGENTS.md"
       ],
       "timeout": 900
+    },
+    "windows-e2e": {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "-tags",
+        "e2e",
+        "./internal/core/e2e/..."
+      ],
+      "kind": "gotest",
+      "needs": [
+        "go"
+      ],
+      "paths": [
+        "cmd/*",
+        "internal/*",
+        "go.mod"
+      ],
+      "tests_template": [
+        "-run",
+        "{tests}"
+      ],
+      "tests_filter": "^[A-Za-z0-9_]+$",
+      "timeout": 900,
+      "note": "Runs on windows-latest in verify.yml; on other OSes it finds no test and is ERROR."
     }
   },
   "always_checks": [
     "harness-selftest"
   ],
   "not_applicable": {
-    "windows-e2e": "Added with F-001: windows-latest runner, a Generic / Text Only printer printing to a file.",
     "xp-win7-run": "No CI runner has XP or Windows 7; MANUAL:admin rows on the owner VM."
   },
   "branch_protection": "not configured — accept requires a green `verify` run for the PR head; the owner checks CI before merging",

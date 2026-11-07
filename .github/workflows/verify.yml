@@ -63,7 +63,8 @@ jobs:
   check:
     needs: plan
     if: needs.plan.outputs.checks != '[]'
-    runs-on: ubuntu-latest
+    # windows-e2e needs a real spooler; everything else runs on Linux
+    runs-on: ${{ matrix.check == 'windows-e2e' && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -87,7 +88,8 @@ jobs:
           git -C "$dir" checkout -q FETCH_HEAD
           echo "GOALRUN=$dir/.agents/skills/goalrun/scripts/goalrun.py" >> "$GITHUB_ENV"
       - name: check
-        run: scripts/harness check ${{ matrix.check }}
+        shell: bash
+        run: python3 scripts/harness check ${{ matrix.check }}
 
   verify:
     needs: [plan, check]
