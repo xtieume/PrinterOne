@@ -33,8 +33,7 @@
         "REQ-CLI-004",
         "REQ-CLI-005",
         "REQ-LOG-002",
-        "REQ-LEG-002",
-        "REQ-LEG-001"
+        "REQ-LEG-002"
       ],
       "allowed_paths": [
         "cmd/*",
