@@ -11,6 +11,7 @@ import (
 
 	"github.com/xtieume/PrinterOne/internal/core/buildinfo"
 	"github.com/xtieume/PrinterOne/internal/core/config"
+	"github.com/xtieume/PrinterOne/internal/core/logfile"
 	"github.com/xtieume/PrinterOne/internal/core/receiver"
 	"github.com/xtieume/PrinterOne/internal/core/service"
 	"github.com/xtieume/PrinterOne/internal/core/spool"
@@ -169,7 +170,29 @@ func serviceCommand(args []string, env Env) int {
 
 // logsCommand is `printerone logs [--config p]`: prints the absolute path of the current log file, exit 0
 // (spec docs/specs/2026-11-07-f002-logs.md §2).
-func logsCommand(args []string, env Env) int { return 0 }
+func logsCommand(args []string, env Env) int {
+	var path string
+	if len(args) == 2 && args[0] == "--config" && args[1] != "" {
+		path = args[1]
+	} else if len(args) != 0 {
+		return usage(env)
+	}
+	l, err := config.LoadLog(config.Lookup{Flag: path, ExeDir: env.ExeDir, DataDir: config.DataDir(env.Getenv)})
+	if err != nil {
+		fmt.Fprintln(env.Stderr, err)
+		return 2
+	}
+	dir := l.Dir
+	if dir == "" {
+		dir = logfile.DefaultDir(config.DataDir(env.Getenv))
+	}
+	p := logfile.Path(dir)
+	if !isWindowsAbsolute(p) {
+		p, _ = filepath.Abs(p)
+	}
+	fmt.Fprintln(env.Stdout, p)
+	return 0
+}
 
 func isWindowsAbsolute(path string) bool {
 	return len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
@@ -201,12 +224,20 @@ func serve(path *string, env Env) int {
 		return 2
 	}
 	printer := cfg.Printers[0]
+	logDir := cfg.Log.Dir
+	if logDir == "" {
+		logDir = logfile.DefaultDir(dataDir)
+	}
+	logFile := &logfile.Writer{Dir: logDir, KeepDays: cfg.Log.KeepDays, Warn: env.Stderr}
+	logFile.Start()
+	output := io.MultiWriter(env.Stdout, logFile)
+	fmt.Fprintln(output, "Log file: "+logfile.Path(logDir))
 	slots := receiver.SlotsMain
 	if env.Edition == "legacy" {
 		slots = receiver.SlotsLegacy
 	}
 	s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(printer.Port), Printer: printer.Printer,
-		Slots: slots, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: env.Stdout,
+		Slots: slots, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: output,
 		Print: func(name string, data []byte) error { return spool.Print(env.Spool, printer.Printer, name, data) }}
 	if err := s.Listen(); err != nil {
 		var busy *receiver.PortBusyError
@@ -221,7 +252,7 @@ func serve(path *string, env Env) int {
 		return 1
 	}
 	addr := s.ListenAddr()
-	fmt.Fprintf(env.Stdout, "Listening on %s\nPrinter: %s\n", addr, printer.Printer)
+	fmt.Fprintf(output, "Listening on %s\nPrinter: %s\n", addr, printer.Printer)
 	if env.Ready != nil {
 		env.Ready(addr)
 	}

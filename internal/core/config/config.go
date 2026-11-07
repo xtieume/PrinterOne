@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/xtieume/PrinterOne/internal/core/logfile"
 )
 
 // DefaultPort is used when a printer entry has no port.
@@ -86,7 +88,45 @@ func Load(l Lookup) (*Config, error) {
 
 // LoadLog finds the config by the lookup order and reads only its `log` section, for `printerone logs`: the printer
 // list is not validated. With no config file it returns the defaults. An invalid log section is an *Error.
-func LoadLog(l Lookup) (Log, error) { return Log{}, nil }
+func LoadLog(l Lookup) (Log, error) {
+	path := ""
+	if l.Flag != "" {
+		path = l.Flag
+	} else if l.ExeDir != "" {
+		p := filepath.Join(l.ExeDir, "config.json")
+		if _, err := os.Stat(p); err == nil {
+			path = p
+		} else if !os.IsNotExist(err) {
+			return Log{}, fileError(p, err)
+		}
+	}
+	if path == "" && l.DataDir != "" {
+		p := filepath.Join(l.DataDir, "config.json")
+		if _, err := os.Stat(p); err == nil {
+			path = p
+		} else if !os.IsNotExist(err) {
+			return Log{}, fileError(p, err)
+		}
+	}
+	if path == "" {
+		return Log{KeepDays: logfile.DefaultKeepDays}, nil
+	}
+	b, err := ioutil.ReadFile(path)
+	if err != nil {
+		return Log{}, fileError(path, err)
+	}
+	if len(b) >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf {
+		b = b[3:]
+	}
+	var root map[string]json.RawMessage
+	if err = json.Unmarshal(b, &root); err != nil {
+		return Log{}, jsonError(path, b, err)
+	}
+	if root == nil {
+		return Log{}, &Error{Msg: fmt.Sprintf("%s: top level must be a JSON object", path)}
+	}
+	return parseLog(root, path)
+}
 
 func loadFile(path string) (*Config, error) {
 	b, err := ioutil.ReadFile(path)
@@ -137,7 +177,11 @@ func loadFile(path string) (*Config, error) {
 		}
 		port = v
 	}
-	return &Config{Path: path, Printers: []Printer{{Name: name, Printer: printer, Port: port}}}, nil
+	lg, err := parseLog(root, path)
+	if err != nil {
+		return nil, err
+	}
+	return &Config{Path: path, Log: lg, Printers: []Printer{{Name: name, Printer: printer, Port: port}}}, nil
 }
 
 func fileError(path string, err error) error { return &Error{Msg: fmt.Sprintf("%s: %v", path, err)} }
@@ -161,4 +205,38 @@ func jsonError(path string, data []byte, err error) error {
 		}
 	}
 	return &Error{Msg: fmt.Sprintf("%s: invalid JSON at %d:%d", path, line, col)}
+}
+
+func parseLog(root map[string]json.RawMessage, path string) (Log, error) {
+	l := Log{KeepDays: logfile.DefaultKeepDays}
+	raw, ok := root["log"]
+	if !ok {
+		return l, nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		return Log{}, fieldError(path, "log")
+	}
+	if v, ok := obj["dir"]; ok {
+		if json.Unmarshal(v, &l.Dir) != nil || l.Dir == "" {
+			return Log{}, fieldError(path, "log.dir")
+		}
+		if !filepath.IsAbs(l.Dir) && !isWindowsAbs(l.Dir) {
+			l.Dir = filepath.Join(filepath.Dir(path), l.Dir)
+		}
+		if !isWindowsAbs(l.Dir) {
+			l.Dir, _ = filepath.Abs(l.Dir)
+		}
+	}
+	if v, ok := obj["keep_days"]; ok {
+		n, e := strconv.Atoi(string(v))
+		if e != nil || n < 1 || n > 3650 {
+			return Log{}, fieldError(path, "log.keep_days")
+		}
+		l.KeepDays = n
+	}
+	return l, nil
+}
+func isWindowsAbs(p string) bool {
+	return len(p) >= 3 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' && (p[2] == '\\' || p[2] == '/')
 }

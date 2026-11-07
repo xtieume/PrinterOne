@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/xtieume/PrinterOne/internal/core/config"
+	"github.com/xtieume/PrinterOne/internal/core/logfile"
 	"github.com/xtieume/PrinterOne/internal/core/receiver"
 	"github.com/xtieume/PrinterOne/internal/core/spool"
 )
@@ -475,10 +475,14 @@ func (l *logWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func openLog(o RunOptions) (io.Writer, func()) {
-	path := LogPath(o.DataDir)
+func openLog(o RunOptions, settings config.Log) (io.Writer, func()) {
+	dir := settings.Dir
+	if dir == "" {
+		dir = logfile.DefaultDir(o.DataDir)
+	}
 	if o.OpenLog != nil {
-		w, err := o.OpenLog(path)
+		p := logfile.Path(dir)
+		w, err := o.OpenLog(p)
 		if err != nil {
 			return &logWriter{}, func() {}
 		}
@@ -488,21 +492,31 @@ func openLog(o RunOptions) (io.Writer, func()) {
 			}
 		}
 	}
-	if os.MkdirAll(filepath.Dir(path), 0755) != nil {
-		return &logWriter{}, func() {}
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return &logWriter{}, func() {}
-	}
-	return &logWriter{f}, func() { f.Close() }
+	w := &logfile.Writer{Dir: dir, KeepDays: settings.KeepDays}
+	w.Start()
+	return &logWriter{w}, func() {}
 }
 
 func runSession(o RunOptions, session Session, d Deps) {
-	log, closeLog := openLog(o)
-	defer closeLog()
 	session.Report(StartPending, 0)
-	cfg, err := config.Load(config.Lookup{Flag: o.ConfigPath})
+	lookup := config.Lookup{Flag: o.ConfigPath}
+	settings, logErr := config.LoadLog(lookup)
+	if logErr != nil {
+		settings = config.Log{}
+	}
+	log, closeLog := openLog(o, settings)
+	defer closeLog()
+	logDir := settings.Dir
+	if logDir == "" {
+		logDir = logfile.DefaultDir(o.DataDir)
+	}
+	fmt.Fprintln(log, "Log file: "+absoluteLogPath(logfile.Path(logDir)))
+	if logErr != nil {
+		fmt.Fprintln(log, logErr)
+		session.Report(Stopped, 2)
+		return
+	}
+	cfg, err := config.Load(lookup)
 	if err != nil {
 		fmt.Fprintln(log, err)
 		session.Report(Stopped, 2)
@@ -560,4 +574,12 @@ func runSession(o RunOptions, session Session, d Deps) {
 			session.Report(Stopped, 0)
 		}
 	}
+}
+
+func absoluteLogPath(path string) string {
+	p, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return p
 }

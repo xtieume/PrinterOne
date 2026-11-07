@@ -5,41 +5,140 @@ package logfile
 
 import (
 	"io"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
-// FileName is the current log file in the log folder; rotated files are printerone-YYYY-MM-DD.log.
 const FileName = "printerone.log"
-
-// DefaultKeepDays is log.keep_days when the config has none.
 const DefaultKeepDays = 30
 
-// DefaultDir is <data dir>\logs, the log folder when the config has no log.dir.
-func DefaultDir(dataDir string) string { return "" }
+func DefaultDir(dataDir string) string { return filepath.Join(dataDir, "logs") }
 
-// Path is the absolute path of the current log file in dir.
-func Path(dir string) string { return "" }
-
-// Writer appends whole lines to Path(Dir). Each Write is one append to the file, which is never held open between
-// writes, so other processes can read it and two writers (or two processes) never split each other's lines.
-// After each write the file's modification time is set to Now(), so the local date of its modification time is
-// the date of its last line — across restarts and across writers. A Write whose Now() falls on a later local date
-// first renames the file to printerone-YYYY-MM-DD.log (that date) and deletes rotated files older than KeepDays:
-// printerone-X.log is deleted when X < today − KeepDays; no other file is touched. Write never fails: the first
-// error is reported once on Warn.
-type Writer struct {
-	Dir      string
-	KeepDays int              // DefaultKeepDays when 0
-	Now      func() time.Time // time.Now when nil
-	Warn     io.Writer        // gets one line `<path>: <OS error>` on the first failed write; nil for none
-
-	mu     sync.Mutex
-	warned bool
+func Path(dir string) string {
+	return filepath.Join(dir, FileName)
 }
 
-// Start creates Dir when missing and deletes rotated files older than KeepDays (start-up clean-up).
-func (w *Writer) Start() {}
+type Writer struct {
+	Dir      string
+	KeepDays int
+	Now      func() time.Time
+	Warn     io.Writer
+	mu       sync.Mutex
+	warned   bool
+}
 
-// Write appends p to the current log file, rotating first when the local day changed. It always returns len(p), nil.
-func (w *Writer) Write(p []byte) (int, error) { return 0, nil }
+var locksMu sync.Mutex
+var locks = make(map[string]*sync.Mutex)
+
+func pathLock(path string) *sync.Mutex {
+	locksMu.Lock()
+	defer locksMu.Unlock()
+	m := locks[path]
+	if m == nil {
+		m = &sync.Mutex{}
+		locks[path] = m
+	}
+	return m
+}
+
+func (w *Writer) Start() {
+	now := w.now()
+	if w.Dir == "" {
+		return
+	}
+	if err := os.MkdirAll(w.Dir, 0755); err != nil {
+		w.warn(Path(w.Dir), err)
+		return
+	}
+	l := pathLock(Path(w.Dir))
+	l.Lock()
+	defer l.Unlock()
+	w.clean(now)
+}
+
+func (w *Writer) Write(p []byte) (int, error) {
+	if w.Dir == "" {
+		return len(p), nil
+	}
+	now := w.now()
+	path := Path(w.Dir)
+	l := pathLock(path)
+	l.Lock()
+	defer l.Unlock()
+	if err := os.MkdirAll(w.Dir, 0755); err != nil {
+		w.warn(path, err)
+		return len(p), nil
+	}
+	if fi, err := os.Stat(path); err == nil && localDate(fi.ModTime()) != localDate(now) {
+		oldDate := localDate(fi.ModTime()).Format("2006-01-02")
+		rotated := filepath.Join(w.Dir, "printerone-"+oldDate+".log")
+		if err = os.Rename(path, rotated); err == nil {
+			w.clean(now)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err == nil {
+		_, err = f.Write(p)
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	if err == nil {
+		err = os.Chtimes(path, now, now)
+	}
+	if err != nil {
+		w.warn(path, err)
+	}
+	return len(p), nil
+}
+
+func (w *Writer) now() time.Time {
+	if w.Now != nil {
+		return w.Now()
+	}
+	return time.Now()
+}
+func localDate(t time.Time) time.Time {
+	y, m, d := t.In(time.Local).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+}
+func (w *Writer) keepDays() int {
+	if w.KeepDays < 1 {
+		return DefaultKeepDays
+	}
+	return w.KeepDays
+}
+func (w *Writer) clean(now time.Time) {
+	entries, err := ioutil.ReadDir(w.Dir)
+	if err != nil {
+		return
+	}
+	cutoff := localDate(now).AddDate(0, 0, -w.keepDays())
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "printerone-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		dateText := strings.TrimSuffix(strings.TrimPrefix(name, "printerone-"), ".log")
+		date, err := time.ParseInLocation("2006-01-02", dateText, time.Local)
+		if err != nil || date.Format("2006-01-02") != dateText {
+			continue
+		}
+		if localDate(date).Before(cutoff) {
+			_ = os.Remove(filepath.Join(w.Dir, name))
+		}
+	}
+}
+func (w *Writer) warn(path string, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.warned || w.Warn == nil {
+		return
+	}
+	w.warned = true
+	io.WriteString(w.Warn, path+": "+err.Error()+"\n")
+}
