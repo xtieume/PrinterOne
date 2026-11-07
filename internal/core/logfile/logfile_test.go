@@ -506,3 +506,74 @@ func TestREQ_LOGF_009_NilWarnDoesNotPanic(t *testing.T) {
 	w.Start()
 	mustWrite(t, w, "x\n")
 }
+
+// TC-LOGF-056
+func TestREQ_LOGF_007_BackwardClockNeverMovesOrOverwritesDays(t *testing.T) {
+	dir := tempDir(t)
+	defer os.RemoveAll(dir)
+	c := &clock{t: at(2026, 11, 7, 10, 0, 0)}
+	w := &Writer{Dir: dir, Now: c.now}
+	mustWrite(t, w, "2026-11-07T10:00:00+07:00 A\n")
+	c.set(at(2026, 11, 8, 0, 0, 0))
+	mustWrite(t, w, "2026-11-08T00:00:00+07:00 B\n")
+	c.set(at(2026, 11, 7, 23, 59, 0))
+	mustWrite(t, w, "2026-11-07T23:59:00+07:00 C\n")
+	if got := read(t, filepath.Join(dir, "printerone-2026-11-07.log")); !strings.Contains(got, "A") {
+		t.Fatalf("day 7 overwritten: %q", got)
+	}
+	if got := read(t, filepath.Join(dir, FileName)); !strings.Contains(got, "B") || !strings.Contains(got, "C") {
+		t.Fatalf("current moved backwards: %q", got)
+	}
+}
+
+// TC-LOGF-057
+func TestREQ_LOGF_007_ExistingRotationTargetIsAppended(t *testing.T) {
+	dir := tempDir(t)
+	defer os.RemoveAll(dir)
+	c := &clock{t: at(2026, 11, 7, 10, 0, 0)}
+	w := &Writer{Dir: dir, Now: c.now}
+	mustWrite(t, w, "2026-11-07T10:00:00+07:00 A\n")
+	if err := ioutil.WriteFile(filepath.Join(dir, "printerone-2026-11-07.log"), []byte("prior\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c.set(at(2026, 11, 8, 10, 0, 0))
+	mustWrite(t, w, "2026-11-08T10:00:00+07:00 B\n")
+	if got := read(t, filepath.Join(dir, "printerone-2026-11-07.log")); !strings.Contains(got, "prior") || !strings.Contains(got, "A") {
+		t.Fatalf("target content %q", got)
+	}
+}
+
+// TC-LOGF-058
+func TestREQ_LOGF_007_FailedRotationRetriedOnLaterWrite(t *testing.T) {
+	dir := tempDir(t)
+	defer os.RemoveAll(dir)
+	c := &clock{t: at(2026, 11, 7, 10, 0, 0)}
+	w := &Writer{Dir: dir, Now: c.now}
+	mustWrite(t, w, "2026-11-07T10:00:00+07:00 A\n")
+	os.Mkdir(filepath.Join(dir, "printerone-2026-11-07.log"), 0755)
+	c.set(at(2026, 11, 8, 10, 0, 0))
+	mustWrite(t, w, "2026-11-08T10:00:00+07:00 B\n")
+	os.Remove(filepath.Join(dir, "printerone-2026-11-07.log"))
+	mustWrite(t, w, "2026-11-08T10:01:00+07:00 C\n")
+	if got := read(t, filepath.Join(dir, "printerone-2026-11-07.log")); !strings.Contains(got, "A") {
+		t.Fatalf("rotation did not retry: %q", got)
+	}
+}
+
+// TC-LOGF-059
+func TestREQ_LOGF_007_TwoIndependentWritersCoordinateRotation(t *testing.T) {
+	dir := tempDir(t)
+	defer os.RemoveAll(dir)
+	c := &clock{t: at(2026, 11, 7, 10, 0, 0)}
+	a := &Writer{Dir: dir, Now: c.now}
+	b := &Writer{Dir: dir, Now: c.now}
+	mustWrite(t, a, "2026-11-07T10:00:00+07:00 A\n")
+	c.set(at(2026, 11, 8, 10, 0, 0))
+	mustWrite(t, a, "2026-11-08T10:00:00+07:00 B\n")
+	mustWrite(t, b, "2026-11-08T10:01:00+07:00 C\n")
+	for _, s := range []string{"A", "B", "C"} {
+		if !strings.Contains(readOrEmpty(filepath.Join(dir, "printerone.log"))+readOrEmpty(filepath.Join(dir, "printerone-2026-11-07.log")), s) {
+			t.Fatalf("line %s lost", s)
+		}
+	}
+}

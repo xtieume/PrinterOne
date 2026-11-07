@@ -208,7 +208,7 @@ func reportServiceError(err error, env Env) int {
 }
 
 func usage(env Env) int {
-	fmt.Fprintln(env.Stderr, "usage: printerone [serve [--config path] | printers | version | service install [--config path] | service uninstall | service run --config path]")
+	fmt.Fprintln(env.Stderr, "usage: printerone [serve [--config path] | printers | logs [--config path] | version | service install [--config path] | service uninstall | service run --config path]")
 	return 2
 }
 
@@ -230,8 +230,9 @@ func serve(path *string, env Env) int {
 	}
 	logFile := &logfile.Writer{Dir: logDir, KeepDays: cfg.Log.KeepDays, Warn: env.Stderr}
 	logFile.Start()
-	output := io.MultiWriter(env.Stdout, logFile)
-	fmt.Fprintln(output, "Log file: "+logfile.Path(logDir))
+	output := io.MultiWriter(logFile, stdoutIgnoringErrors{env.Stdout})
+	absLogPath, _ := filepath.Abs(logfile.Path(logDir))
+	fmt.Fprintln(output, "Log file: "+absLogPath)
 	slots := receiver.SlotsMain
 	if env.Edition == "legacy" {
 		slots = receiver.SlotsLegacy
@@ -284,4 +285,13 @@ func serve(path *string, env Env) int {
 	case <-env.Interrupt:
 		return 1
 	}
+}
+
+type stdoutIgnoringErrors struct{ w io.Writer }
+
+func (s stdoutIgnoringErrors) Write(p []byte) (int, error) {
+	if s.w != nil {
+		_, _ = s.w.Write(p)
+	}
+	return len(p), nil
 }

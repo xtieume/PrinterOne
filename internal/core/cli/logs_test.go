@@ -287,3 +287,23 @@ func TestREQ_LOGF_011_ServeFirstLineNamesLogFile(t *testing.T) {
 		t.Fatalf("first stdout line %q, first file line %q; want %q", first, fileFirst, want)
 	}
 }
+
+// TC-LOGF-060
+func TestREQ_LOGF_004_FileGetsLineWhenStdoutFails(t *testing.T) {
+	r := newRig(t, "main")
+	defer r.cleanup()
+	r.env.Stdout = failingWriter{}
+	r.start("serve", "--config", r.cfg)
+	r.waitReady()
+	c := r.send("hello")
+	c.Close()
+	time.Sleep(100 * time.Millisecond)
+	r.stop()
+	if got := readFileOrEmpty(r.defaultLog()); !strings.Contains(got, "Listening on") || !strings.Contains(got, " printed") {
+		t.Fatalf("log file missing startup or connection line: %q", got)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, os.ErrPermission }
