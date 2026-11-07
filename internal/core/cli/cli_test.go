@@ -1018,3 +1018,77 @@ func TestREQ_CLI_001_CtrlCDoesNotServeClientWaitingForSlot(t *testing.T) {
 		t.Fatalf("%d documents printed after Ctrl+C, want none", len(docs))
 	}
 }
+
+// TC-CFG-040 (ledger audit 2026-11-07): an unreadable config fails `serve` the same way bad JSON does.
+func TestREQ_CFG_004_ServeUnreadableExits2(t *testing.T) {
+	r := newRig(t, "main")
+	defer r.cleanup()
+	dir := filepath.Join(r.dir, "config-is-a-dir")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if code := r.run("serve", "--config", dir); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	oneStderrLine(t, r.stderr.String(), dir)
+	r.noReady()
+}
+
+// TC-CLI-020 (ledger audit 2026-11-07): Ctrl+C closes a connection that is still receiving and prints nothing of it.
+func TestREQ_CLI_001_CtrlCDropsReceivingConnection(t *testing.T) {
+	r := newRig(t, "main")
+	defer r.cleanup()
+	r.start("serve", "--config", r.cfg)
+	r.waitReady()
+	c := r.send("half a job")
+	defer c.Close()
+	time.Sleep(300 * time.Millisecond)
+	r.stop()
+	if docs := r.sp.done(); len(docs) != 0 {
+		t.Fatalf("printed %d documents, want none from a connection still receiving at Ctrl+C", len(docs))
+	}
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("client connection still open after Ctrl+C")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatal("client connection still open after Ctrl+C")
+	}
+}
+
+// TC-LOG-020 (ledger audit 2026-11-07): the full §2.5 line for `empty`, `dropped: reset` and `dropped: shutdown`.
+func TestREQ_LOG_001_FullLineForEmptyResetShutdown(t *testing.T) {
+	r := newRig(t, "main")
+	defer r.cleanup()
+	r.start("serve", "--config", r.cfg)
+	r.waitReady()
+	line := func(local string, n int, result string) *regexp.Regexp {
+		return regexp.MustCompile(`^\S+ ` + regexp.QuoteMeta(local) + ` ` + strconv.Itoa(n) + `B "` +
+			regexp.QuoteMeta(printerName) + `" ` + regexp.QuoteMeta(result) + `$`)
+	}
+	empty := r.dial()
+	emptyAddr := empty.LocalAddr().String()
+	empty.Close()
+	reset := r.send("ab")
+	resetAddr := reset.LocalAddr().String()
+	time.Sleep(200 * time.Millisecond)
+	reset.SetLinger(0)
+	reset.Close()
+	r.waitConnLines(2)
+	open := r.send("xyz")
+	openAddr := open.LocalAddr().String()
+	defer open.Close()
+	time.Sleep(300 * time.Millisecond)
+	r.stop()
+	want := []*regexp.Regexp{line(emptyAddr, 0, "empty"), line(resetAddr, 2, "dropped: reset"),
+		line(openAddr, 3, "dropped: shutdown")}
+	lines := r.connLines()
+	for _, re := range want {
+		found := false
+		for _, l := range lines {
+			found = found || re.MatchString(l)
+		}
+		if !found {
+			t.Errorf("no connection line matching %s in %q", re, lines)
+		}
+	}
+}

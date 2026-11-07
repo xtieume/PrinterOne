@@ -1,59 +1,245 @@
-// Package receiver accepts RAW print jobs over TCP (spec docs/specs/2026-11-07-f001-core.md §2.2, §2.5).
+// Package receiver accepts RAW print jobs over TCP.
 // Core package: Go 1.10 syntax and stdlib only (rule 01-go-code).
 package receiver
 
 import (
+	"bufio"
+	"fmt"
 	"io"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
+
+	"github.com/xtieume/PrinterOne/internal/core/spool"
 )
 
-// Limits from the spec.
 const (
-	MaxJobBytes = 268435456 // 256 MB: a job of exactly this size prints, one byte more is dropped
-	IdleTimeout = 60 * time.Second
-	SlotsMain   = 8
-	SlotsLegacy = 2
+	MaxJobBytes int64 = 268435456
+	IdleTimeout       = 60 * time.Second
+	SlotsMain         = 8
+	SlotsLegacy       = 2
 )
 
-// PrintFunc prints one fully received job. A *spool.Error makes the log line `failed: <code> <message>`.
 type PrintFunc func(docName string, data []byte) error
 
-// Server receives jobs on Addr and hands each complete one to Print, one at a time.
 type Server struct {
-	Addr     string        // "0.0.0.0:9100"; ":0" in tests
-	Printer  string        // config `printer` value, used in log lines
-	Print    PrintFunc     // writes one job
-	MaxBytes int64         // MaxJobBytes in production
-	Idle     time.Duration // IdleTimeout in production
-	Slots    int           // connections received at once
-	Log      io.Writer     // one line per connection (§2.5)
+	Addr     string
+	Printer  string
+	Print    PrintFunc
+	MaxBytes int64
+	Idle     time.Duration
+	Slots    int
+	Log      io.Writer
 	Now      func() time.Time
+
+	mu           sync.Mutex
+	ln           net.Listener
+	conns        map[net.Conn]bool
+	stopping     bool
+	serveDone    chan struct{}
+	stop         chan struct{}
+	shutdownOnce sync.Once
+	logs         sync.Mutex
 }
 
-// PortBusyError means the port is already in use; the program exits 1.
-type PortBusyError struct {
-	Port int
-}
+type PortBusyError struct{ Port int }
 
-func (e *PortBusyError) Error() string { return "" } // F-001 scaffold: declaration only
+func (e *PortBusyError) Error() string { return fmt.Sprintf("port %d is already in use", e.Port) }
 
-// Listen binds the port. A port in use returns *PortBusyError.
 func (s *Server) Listen() error {
-	return nil // F-001 scaffold: declaration only
+	ln, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		if a, ok := net.ResolveTCPAddr("tcp", s.Addr); ok == nil && a.Port != 0 {
+			if op, ok := err.(*net.OpError); ok && strings.Contains(strings.ToLower(op.Err.Error()), "address already in use") {
+				return &PortBusyError{Port: a.Port}
+			}
+		}
+		return err
+	}
+	s.mu.Lock()
+	s.ln = ln
+	s.conns = make(map[net.Conn]bool)
+	s.serveDone = make(chan struct{})
+	s.stop = make(chan struct{})
+	s.mu.Unlock()
+	return nil
 }
 
-// ListenAddr is the bound address after Listen (useful with ":0").
 func (s *Server) ListenAddr() string {
-	return "" // F-001 scaffold: declaration only
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ln == nil {
+		return ""
+	}
+	a := s.ln.Addr().String()
+	if ta, ok := s.ln.Addr().(*net.TCPAddr); ok && (ta.IP == nil || ta.IP.IsUnspecified()) {
+		return "0.0.0.0:" + strconv.Itoa(ta.Port)
+	}
+	return a
 }
 
-// Serve accepts connections until Shutdown, then returns nil.
+type printJob struct {
+	conn string
+	ip   string
+	data []byte
+}
+
 func (s *Server) Serve() error {
-	return nil // F-001 scaffold: declaration only
+	s.mu.Lock()
+	ln := s.ln
+	stop := s.stop
+	done := s.serveDone
+	s.mu.Unlock()
+	if ln == nil {
+		return fmt.Errorf("receiver: Listen must be called first")
+	}
+	jobs := make(chan printJob)
+	var handlers sync.WaitGroup
+	var printer sync.WaitGroup
+	printer.Add(1)
+	go func() {
+		defer printer.Done()
+		for j := range jobs {
+			err := s.Print("PrinterOne job from "+j.ip, j.data)
+			result := "printed"
+			if err != nil {
+				if e, ok := err.(*spool.Error); ok {
+					result = fmt.Sprintf("failed: %d %s", e.Code, e.Msg)
+				} else {
+					result = "failed: " + err.Error()
+				}
+			}
+			s.log(j.conn, int64(len(j.data)), result)
+		}
+	}()
+	limit := s.Slots
+	if limit <= 0 {
+		limit = SlotsMain
+	}
+	sem := make(chan struct{}, limit)
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			break
+		}
+		s.mu.Lock()
+		if s.stopping {
+			s.mu.Unlock()
+			c.Close()
+			continue
+		}
+		s.conns[c] = true
+		s.mu.Unlock()
+		handlers.Add(1)
+		go func(c net.Conn) {
+			defer handlers.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-stop:
+				return
+			}
+			defer func() { <-sem }()
+			data, result := s.receive(c)
+			s.mu.Lock()
+			delete(s.conns, c)
+			stopping := s.stopping
+			s.mu.Unlock()
+			if stopping {
+				s.log(c.RemoteAddr().String(), int64(len(data)), "dropped: shutdown")
+				return
+			}
+			if result != "complete" {
+				s.log(c.RemoteAddr().String(), int64(len(data)), result)
+				return
+			}
+			ip := c.RemoteAddr().(*net.TCPAddr).IP.String()
+			jobs <- printJob{conn: c.RemoteAddr().String(), ip: ip, data: data}
+		}(c)
+	}
+	s.mu.Lock()
+	s.stopping = true
+	s.mu.Unlock()
+	handlers.Wait()
+	close(jobs)
+	printer.Wait()
+	close(done)
+	return nil
 }
 
-// Shutdown stops accepting, drops connections still receiving (`dropped: shutdown`) and returns after every
-// fully received job has been printed.
+func (s *Server) receive(c net.Conn) ([]byte, string) {
+	defer c.Close()
+	max := s.MaxBytes
+	if max <= 0 {
+		max = MaxJobBytes
+	}
+	idle := s.Idle
+	if idle <= 0 {
+		idle = IdleTimeout
+	}
+	buf := make([]byte, 32*1024)
+	data := make([]byte, 0)
+	for {
+		c.SetReadDeadline(time.Now().Add(idle))
+		n, err := c.Read(buf)
+		if n > 0 {
+			if int64(len(data))+int64(n) > max {
+				data = append(data, buf[:n]...)
+				return data, "dropped: too large"
+			}
+			data = append(data, buf[:n]...)
+		}
+		if err != nil {
+			if err == io.EOF {
+				if len(data) == 0 {
+					return data, "empty"
+				}
+				return data, "complete"
+			}
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				return data, "dropped: idle"
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "reset") || strings.Contains(strings.ToLower(err.Error()), "abort") {
+				return data, "dropped: reset"
+			}
+			return data, "dropped: reset"
+		}
+	}
+}
+
+func (s *Server) log(addr string, n int64, result string) {
+	if s.Log == nil {
+		return
+	}
+	now := time.Now
+	if s.Now != nil {
+		now = s.Now
+	}
+	s.logs.Lock()
+	defer s.logs.Unlock()
+	w := bufio.NewWriter(s.Log)
+	fmt.Fprintf(w, "%s %s %dB \"%s\" %s\n", now().Format(time.RFC3339), addr, n, s.Printer, result)
+	w.Flush()
+}
+
 func (s *Server) Shutdown() {
-	// F-001 scaffold: declaration only
+	s.shutdownOnce.Do(func() {
+		s.mu.Lock()
+		s.stopping = true
+		if s.stop != nil {
+			close(s.stop)
+		}
+		if s.ln != nil {
+			s.ln.Close()
+		}
+		for c := range s.conns {
+			c.Close()
+		}
+		done := s.serveDone
+		s.mu.Unlock()
+		if done != nil {
+			<-done
+		}
+	})
 }
