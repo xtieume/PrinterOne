@@ -5,6 +5,10 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 pkg=github.com/xtieume/PrinterOne
+if ! docker version >/dev/null 2>&1; then
+  echo "go110: the Docker daemon is not reachable; cannot run Go 1.10.8" >&2
+  exit 125  # same code `docker run` uses when it cannot start a container: an infrastructure error, not the code
+fi
 exec docker run --rm --platform linux/amd64 -v "$root:/src:ro" -e "CGO_ENABLED=0" golang:1.10.8 sh -euc '
   dst=/go/src/'"$pkg"'
   mkdir -p "$dst"

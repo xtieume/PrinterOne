@@ -20,7 +20,9 @@ func TestREQ_MULTI_008_SlotPoolSharedByServers(t *testing.T) {
 	defer two.close()
 
 	a := one.send([]byte("a")) // holds the only slot while open
-	time.Sleep(100 * time.Millisecond)
+	// With a shared pool a port takes the slot only for AcceptWait before handing it back, so `a` can sit in the
+	// backlog that long while the other port holds the slot; wait until it has surely been accepted.
+	time.Sleep(2*AcceptWait + 100*time.Millisecond)
 	b := two.send([]byte("b"))
 	b.Close()
 	time.Sleep(400 * time.Millisecond)

@@ -237,6 +237,8 @@ class Check(Fixture):
         self.assertEqual(H.classify('gotest', 0, 'not json {\n{broken', {}, 0)[0], H.ERROR)
         # core-go110: a build error under Go 1.10 is the finding itself
         self.assertEqual(H.classify('gotest', 1, build, {'build_error_fails': True}, 0)[0], H.FAIL)
+        # but a toolchain container that never started (docker exit 125) is never a finding about the code
+        self.assertEqual(H.classify('gotest', 125, 'Cannot connect to the Docker daemon', {'build_error_fails': True}, 0)[0], H.ERROR)
         self.assertEqual(H.classify('exit', 127, '', {}, 0)[0], H.ERROR)
 
     def test_REQ_HAR_005_real_go_test_pass_fail_and_build_error(self):
