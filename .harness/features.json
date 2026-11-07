@@ -50,6 +50,49 @@
       "risk": "high",
       "issues": [],
       "dependencies": []
+    },
+    {
+      "id": "F-008",
+      "revision": 1,
+      "behavior": "Windows service install/uninstall/run with its log file, firewall rule added and removed with it",
+      "spec": "docs/specs/2026-11-07-f008-service.md",
+      "acceptance": [
+        "REQ-SVC-001",
+        "REQ-SVC-002",
+        "REQ-SVC-003",
+        "REQ-SVC-004",
+        "REQ-SVC-005",
+        "REQ-SVC-006",
+        "REQ-SVC-007",
+        "REQ-SVC-008",
+        "REQ-SVC-009",
+        "REQ-SVC-010",
+        "REQ-SVC-011",
+        "REQ-SVC-012",
+        "REQ-SVC-013",
+        "REQ-SVC-014",
+        "REQ-SVC-015",
+        "REQ-SVC-016",
+        "REQ-SVC-017",
+        "REQ-SVC-018"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110",
+        "windows-e2e"
+      ],
+      "risk": "high",
+      "issues": [],
+      "dependencies": [
+        "F-001@1"
+      ]
     }
   ]
 }
