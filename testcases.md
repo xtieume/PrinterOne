@@ -299,3 +299,47 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-MULTI-045 | REQ-MULTI-002 | `TestREQ_MULTI_002_ServiceInstallInvalidEntryChangesNothing` | `service install` with an invalid entry changes nothing |
 | TC-MULTI-046 | REQ-MULTI-008 | `TestREQ_MULTI_008_JobLimitIsPerJobNotPerProcess` | 256 MB is per job, not a process budget (Claude decision) |
 | TC-MULTI-047 | REQ-MULTI-009 | `TestREQ_MULTI_009_SinglePrinterStartUpLine` | One printer: one start-up line in the new shape |
+| TC-ALLOW-001 | REQ-ALLOW-001 | `TestREQ_ALLOW_001_NoAllowKeyLoadsNilList` | Config without `allow` loads a nil list; catches: missing key parsed as empty list (blocks everyone) |
+| TC-ALLOW-002 | REQ-ALLOW-001 | `TestREQ_ALLOW_001_NilListAllowsEveryone` | nil `allow.List` allows every address family; catches: nil treated as deny-all |
+| TC-ALLOW-003 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ListedAddressOrBlockMatches/TC-ALLOW-003` | Exact address matches only itself; catches: string prefix match (`10.0.0.50`) |
+| TC-ALLOW-004 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ListedAddressOrBlockMatches/TC-ALLOW-004` | /24 includes first and last address, excludes neighbours; catches: off-by-one mask; /16 used |
+| TC-ALLOW-005 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ListedAddressOrBlockMatches/TC-ALLOW-005` | Spec example list (block + address); catches: only the first item checked |
+| TC-ALLOW-006 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ListedAddressOrBlockMatches/TC-ALLOW-006` | /32 and /0; catches: /0 parsed as "no list"/rejected; /32 widened |
+| TC-ALLOW-007 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ListedAddressOrBlockMatches/TC-ALLOW-007` | CIDR with host bits set (Claude decision); catches: host-bits CIDR treated as single address or rejected |
+| TC-ALLOW-008 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ListedAddressOrBlockMatches/TC-ALLOW-008` | Duplicate / overlapping items accepted; catches: duplicates rejected as invalid |
+| TC-ALLOW-009 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ConfigListIsParsed` | Config list is parsed into `Allow[0]`; catches: key ignored by the loader |
+| TC-ALLOW-010 | REQ-ALLOW-001 | `TestREQ_ALLOW_001_NilAllowPrints` | Server with nil Allow prints as in F-001; catches: nil Allow dereferenced / treated as deny |
+| TC-ALLOW-011 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_AllowedClientPrintedAndAskedWithItsIP` | Server asks Allow once with the client IP; catches: Allow never consulted |
+| TC-ALLOW-012 | REQ-ALLOW-003 | `TestREQ_ALLOW_003_RejectedWithoutReadOrPrint` | Rejected: no Read, no print, one `0B` line, closed at once; catches: data read then discarded; closed only at idle timeout; logged with byte count |
+| TC-ALLOW-013 | REQ-ALLOW-003 | `TestREQ_ALLOW_003_RejectedClientHoldsNoSlot` | Rejected client holds no slot; catches: check done after taking the slot and slot kept until the client closes |
+| TC-ALLOW-014 | REQ-ALLOW-003 | `TestREQ_ALLOW_003_ManyRejectedThenAllowed` | 5 rejected clients that stay open, then an allowed one; catches: rejected sockets leak slots or goroutines blocking accept |
+| TC-ALLOW-015 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_IPv6ClientMatchedByIPv6List` | IPv6 client on `[::1]` matched by IPv6 entries; catches: IPv6 client matched by IPv4 /0; v6 not parsed |
+| TC-ALLOW-016 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_MappedIPv4OnDualStackSocket` | IPv4 client on a dual-stack `[::]` socket; catches: mapped address compared as 16 bytes against a 4-byte entry |
+| TC-ALLOW-017 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ServeListedClientPrinted` | serve prints a listed client; file change needs restart (also §2 restart rule, REQ-ALLOW-008 line); catches: cli drops the list; hot reload |
+| TC-ALLOW-018 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_IPv6AndMappedIPv4/TC-ALLOW-018` | IPv6 block and address; catches: IPv6 mask truncated to 32 bits |
+| TC-ALLOW-019 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_IPv6AndMappedIPv4/TC-ALLOW-019` | `::ffff:a.b.c.d` (16-byte) matches the IPv4 entry; catches: byte-length compare without `To4()` |
+| TC-ALLOW-020 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_IPv6AndMappedIPv4/TC-ALLOW-020` | No cross-family match; catches: IPv4-compatible `::a00:5` treated as mapped; ::/0 matching IPv4 |
+| TC-ALLOW-021 | REQ-ALLOW-005 | `TestREQ_ALLOW_005_EmptyOrWrongTypeAllowNamesField/TC-ALLOW-021` | `allow: []`; catches: empty list accepted (blocks all) or treated as missing |
+| TC-ALLOW-022 | REQ-ALLOW-005 | `TestREQ_ALLOW_005_EmptyOrWrongTypeAllowNamesField/TC-ALLOW-022` | `allow` of the wrong type (Claude decision); catches: null treated as missing; string accepted as one item |
+| TC-ALLOW-023 | REQ-ALLOW-005 | `TestREQ_ALLOW_005_EmptyOrWrongTypeAllowNamesField/TC-ALLOW-023` | Empty list on entry 1 names its index; catches: index hard-coded 0 |
+| TC-ALLOW-024 | REQ-ALLOW-003 | `TestREQ_ALLOW_003_ServeRejectsUnlistedClient` | serve rejects an unlisted client; catches: cli never wires Allow |
+| TC-ALLOW-025 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_ParseNamesFirstInvalidItem` | `allow.Parse` rejects malformed items, first by index; catches: hostname resolved; spaces trimmed; zone accepted; last bad index |
+| TC-ALLOW-026 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_InvalidItemNamesIndex/TC-ALLOW-026` | Config names the invalid item; catches: whole list named; index off by one |
+| TC-ALLOW-027 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_InvalidItemNamesIndex/TC-ALLOW-027` | Non-string item; catches: number silently skipped |
+| TC-ALLOW-028 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_InvalidItemNamesIndex/TC-ALLOW-028` | Several invalid items → first by index; catches: last error reported |
+| TC-ALLOW-029 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_InvalidItemNamesIndex/TC-ALLOW-029` | Invalid item on entry 1; catches: printer index hard-coded 0 |
+| TC-ALLOW-030 | REQ-ALLOW-007 | `TestREQ_ALLOW_007_EachEntryKeepsItsOwnList` | Each entry keeps its own list; catches: one list shared / last wins |
+| TC-ALLOW-031 | REQ-ALLOW-008 | `TestREQ_ALLOW_008_StringListsEveryItem` | `List.String` names every item; catches: only the first item shown |
+| TC-ALLOW-032 | REQ-ALLOW-005 | `TestREQ_ALLOW_005_ServeEmptyAllowExits2` | serve with `allow: []` exits 2; catches: server starts and blocks everyone |
+| TC-ALLOW-033 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_ServeInvalidItemExits2` | serve with an invalid item exits 2; catches: invalid item skipped and server starts |
+| TC-ALLOW-034 | REQ-ALLOW-007 | `TestREQ_ALLOW_007_ListAppliesOnlyToItsPort` | List applies only to its own port; catches: first list applied to all ports; last (nil) list applied to all |
+| TC-ALLOW-035 | REQ-ALLOW-008 | `TestREQ_ALLOW_008_StartUpLinesShowEachList` | Start-up lines with two printers; catches: one global allow line; lists swapped |
+| TC-ALLOW-036 | REQ-ALLOW-008 | `TestREQ_ALLOW_008_SinglePrinterAllowAll` | One printer without `allow` shows `allow: all`; catches: allow shown only for multi-printer configs |
+| TC-ALLOW-037 | REQ-ALLOW-009 | `scripts/harness check core-go110` | Allowlist code with Go 1.10.8; catches: `net/netip` or `strings.Cut` used |
+| TC-ALLOW-038 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ServeListedClientPrinted` (restart part) | After a restart the rewritten list applies; catches: list cached across runs / read from a stale copy |
+| TC-ALLOW-039 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_LeadingZeroRefusedInBothEditions` | Leading-zero IPv4 refused in both editions (Claude decision); catches: Go 1.10 `ParseIP` reading `010` as 10 on legacy only |
+| TC-ALLOW-040 | REQ-ALLOW-003 | `TestREQ_ALLOW_003_ChecksRemoteNotLocalAddress` | The remote address is checked, not the local one; catches: `conn.LocalAddr()` passed to Allow |
+| TC-ALLOW-041 | REQ-ALLOW-003 | `TestREQ_ALLOW_003_RejectedAtOnceWhileSlotsBusy` | Refused client closed at once while every slot is busy; catches: waits for a slot before the check |
+| TC-ALLOW-042 | REQ-ALLOW-007 | `TestREQ_ALLOW_007_ListOnLaterEntryOnly` | List on a later entry only; catches: `Allow` indexed by entries-with-list (shift) |
+| TC-ALLOW-043 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_NilIPNotAllowedByAList` | A list never allows a nil IP; catches: fail-open when the client IP is unknown |
+| TC-ALLOW-044 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_MappedItemMatchesIPv4Client` | A mapped item matches the plain IPv4 client; catches: mapped item stored as /128 compared byte-wise |

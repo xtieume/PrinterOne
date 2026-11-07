@@ -35,6 +35,7 @@ type Server struct {
 	Pool     *SlotPool // shared receive slots (F-003); nil: Slots of its own
 	Log      io.Writer
 	Now      func() time.Time
+	Allow    func(net.IP) bool // F-004: false → closed before any Read, logged `0B … rejected: not allowed`; nil: all
 
 	mu           sync.Mutex
 	ln           net.Listener

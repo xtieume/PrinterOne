@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/xtieume/PrinterOne/internal/core/allow"
 	"github.com/xtieume/PrinterOne/internal/core/logfile"
 )
 
@@ -33,6 +34,7 @@ type Log struct {
 type Config struct {
 	Path     string // the file it was read from
 	Printers []Printer
+	Allow    []allow.List // Allow[i] is Printers[i]'s `allow` list (F-004); nil entry: every client
 	Log      Log
 }
 
