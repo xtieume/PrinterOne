@@ -132,6 +132,46 @@
         "F-001@1",
         "F-008@1"
       ]
+    },
+    {
+      "id": "F-003",
+      "revision": 1,
+      "behavior": "Several printers in one server, one TCP port each, shared limits, firewall opens every port",
+      "spec": "docs/specs/2026-11-07-f003-multi-printer.md",
+      "acceptance": [
+        "REQ-MULTI-001",
+        "REQ-MULTI-002",
+        "REQ-MULTI-003",
+        "REQ-MULTI-004",
+        "REQ-MULTI-005",
+        "REQ-MULTI-006",
+        "REQ-MULTI-007",
+        "REQ-MULTI-008",
+        "REQ-MULTI-009",
+        "REQ-MULTI-010",
+        "REQ-MULTI-011",
+        "REQ-MULTI-012"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110"
+      ],
+      "risk": "medium",
+      "issues": [
+        1,
+        6
+      ],
+      "dependencies": [
+        "F-001@1",
+        "F-008@1"
+      ]
     }
   ]
 }
