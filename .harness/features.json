@@ -207,6 +207,54 @@
       "dependencies": [
         "F-003@1"
       ]
+    },
+    {
+      "id": "F-005",
+      "revision": 1,
+      "behavior": "Web UI and JSON API served by PrinterOne, same functions without JS (IE6) and with JS, two looks",
+      "spec": "docs/specs/2026-11-07-f005-web-ui.md",
+      "acceptance": [
+        "REQ-UI-001",
+        "REQ-UI-002",
+        "REQ-UI-003",
+        "REQ-UI-004",
+        "REQ-UI-005",
+        "REQ-UI-006",
+        "REQ-UI-007",
+        "REQ-UI-008",
+        "REQ-UI-009",
+        "REQ-UI-010",
+        "REQ-UI-011",
+        "REQ-UI-012",
+        "REQ-UI-013",
+        "REQ-UI-014",
+        "REQ-UI-015",
+        "REQ-UI-016",
+        "REQ-UI-017",
+        "REQ-UI-018",
+        "REQ-UI-019",
+        "REQ-UI-020"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "static/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110",
+        "windows-e2e"
+      ],
+      "risk": "high",
+      "issues": [],
+      "dependencies": [
+        "F-002@1",
+        "F-004@1",
+        "F-008@1"
+      ]
     }
   ]
 }
