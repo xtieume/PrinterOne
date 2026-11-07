@@ -82,12 +82,19 @@ func loadFile(path string) (*Config, error) {
 	if err != nil {
 		return nil, fileError(path, err)
 	}
+	if len(b) >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf {
+		b = b[3:]
+	}
+	var top interface{}
+	if err := json.Unmarshal(b, &top); err != nil {
+		return nil, jsonError(path, b, err)
+	}
+	if _, ok := top.(map[string]interface{}); !ok {
+		return nil, &Error{Msg: fmt.Sprintf("%s: top level must be a JSON object", path)}
+	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(b, &root); err != nil {
 		return nil, jsonError(path, b, err)
-	}
-	if root == nil {
-		return nil, fieldError(path, "version")
 	}
 	if string(root["version"]) != "2" {
 		return nil, fieldError(path, "version")

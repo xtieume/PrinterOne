@@ -114,12 +114,25 @@ func serve(path *string, env Env) int {
 		env.Ready(addr)
 	}
 	done := make(chan struct{})
-	go func() { s.Serve(); close(done) }()
+	var serveErr error
+	go func() { serveErr = s.Serve(); close(done) }()
 	if env.Interrupt == nil {
 		<-done
+		if serveErr != nil {
+			fmt.Fprintln(env.Stderr, serveErr)
+			return 1
+		}
 		return 0
 	}
-	<-env.Interrupt
+	select {
+	case <-env.Interrupt:
+	case <-done:
+		if serveErr != nil {
+			fmt.Fprintln(env.Stderr, serveErr)
+			return 1
+		}
+		return 0
+	}
 	stopped := make(chan struct{})
 	go func() { s.Shutdown(); <-done; close(stopped) }()
 	select {

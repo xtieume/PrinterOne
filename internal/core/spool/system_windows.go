@@ -143,11 +143,20 @@ func (winAPI) EnumPrinters() ([]string, error) {
 	if needed == 0 {
 		return []string{}, nil // no printers installed, the call succeeded
 	}
-	buf := make([]byte, needed)
-	r1, _, e = procEnumPrinters.Call(flags, 0, 4, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)),
-		uintptr(unsafe.Pointer(&needed)), uintptr(unsafe.Pointer(&returned)))
-	if r1 == 0 {
-		return nil, winError("EnumPrinters", e)
+	var buf []byte
+	for tries := 0; tries < 5; tries++ {
+		buf = make([]byte, needed)
+		r1, _, e = procEnumPrinters.Call(flags, 0, 4, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)),
+			uintptr(unsafe.Pointer(&needed)), uintptr(unsafe.Pointer(&returned)))
+		if r1 != 0 {
+			break
+		}
+		if errno, ok := e.(syscall.Errno); !ok || uint32(errno) != 122 || needed <= uint32(len(buf)) {
+			return nil, winError("EnumPrinters", e)
+		}
+		if tries == 4 {
+			return nil, winError("EnumPrinters", e)
+		}
 	}
 	names := make([]string, 0, returned)
 	sz := int(unsafe.Sizeof(printerInfo4{}))

@@ -390,6 +390,91 @@ func TestREQ_RECV_007_ClientOverSlotLimitWaits(t *testing.T) {
 	}
 }
 
+type failOnceListener struct {
+	net.Listener
+	mu     sync.Mutex
+	failed bool
+}
+
+func (l *failOnceListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.failed {
+		l.failed = true
+		return nil, io.ErrUnexpectedEOF
+	}
+	return l.Listener.Accept()
+}
+
+type countListener struct {
+	net.Listener
+	mu       sync.Mutex
+	accepted int
+}
+
+func (l *countListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.mu.Lock()
+		l.accepted++
+		l.mu.Unlock()
+	}
+	return c, err
+}
+func (l *countListener) count() int { l.mu.Lock(); defer l.mu.Unlock(); return l.accepted }
+
+func TestREQ_RECV_010_AcceptErrorRetriesAndPrintsNextJob(t *testing.T) {
+	r := &rig{t: t}
+	r.srv = &Server{Addr: "127.0.0.1:0", Printer: printerName, MaxBytes: 1024, Idle: time.Second, Slots: 1, Log: r, Now: fixedNow, Print: r.print}
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.srv.Listener = &failOnceListener{Listener: base}
+	if err = r.srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go r.srv.Serve()
+	defer r.close()
+	c := r.send([]byte("after accept error"))
+	c.Close()
+	jobs, _ := r.waitLines(1)
+	if len(jobs) != 1 || string(jobs[0].data) != "after accept error" {
+		t.Fatalf("jobs %v", jobs)
+	}
+}
+
+func TestREQ_RECV_007_ClientWaitsInBacklogUntilSlotFrees(t *testing.T) {
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &countListener{Listener: base}
+	r := newRig(t, func(r *rig) { r.srv.Slots = 1; r.srv.Idle = 5 * time.Second; r.srv.Listener = listener })
+	defer r.close()
+	a := r.dial()
+	b := r.send([]byte("B"))
+	b.Close()
+	time.Sleep(150 * time.Millisecond)
+	if got := listener.count(); got != 1 {
+		t.Fatalf("accepted %d connections while only one slot exists, want 1", got)
+	}
+	if jobs, lines := r.snapshot(); len(jobs) != 0 || len(lines) != 0 {
+		t.Fatalf("before slot frees: jobs=%v logs=%q", jobs, lines)
+	}
+	a.Close()
+	jobs, lines := r.waitLines(2)
+	found := false
+	for _, j := range jobs {
+		if string(j.data) == "B" {
+			found = true
+		}
+	}
+	if !found || len(lines) != 2 {
+		t.Fatalf("after slot frees: jobs=%v logs=%q", jobs, lines)
+	}
+}
+
 // TC-RECV-024
 func TestREQ_RECV_007_BacklogWaitLongerThanIdleNotDropped(t *testing.T) {
 	r := newRig(t, func(r *rig) { r.srv.Slots = 1 })

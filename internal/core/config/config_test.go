@@ -199,6 +199,28 @@ func TestREQ_CFG_003_ValidFileLoadsWithDefaults(t *testing.T) {
 	}
 }
 
+func TestREQ_CFG_003_LeadingUTF8BOMIgnored(t *testing.T) {
+	d := tempDir(t)
+	defer os.RemoveAll(d)
+	f := writeFile(t, filepath.Join(d, "bom.json"), "\xef\xbb\xbf"+cfgWithPort(9101))
+	c := mustLoad(t, Lookup{Flag: f})
+	if c.Printers[0].Port != 9101 {
+		t.Fatalf("port = %d, want 9101", c.Printers[0].Port)
+	}
+}
+
+func TestREQ_CFG_005_TopLevelMustBeObject(t *testing.T) {
+	for _, body := range []string{`[]`, `"x"`, `3`} {
+		d := tempDir(t)
+		f := writeFile(t, filepath.Join(d, "bad.json"), body)
+		e := mustFail(t, Lookup{Flag: f})
+		if !strings.Contains(e.Msg, f) || !strings.Contains(e.Msg, "top level must be a JSON object") {
+			t.Fatalf("error %q, want path and top level message", e.Msg)
+		}
+		os.RemoveAll(d)
+	}
+}
+
 // TC-CFG-015..017
 func TestREQ_CFG_004_UnreadableOrBadJSONNamesPathAndPosition(t *testing.T) {
 	d := tempDir(t)

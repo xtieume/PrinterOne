@@ -139,3 +139,7 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-CFG-040 | REQ-CFG-004 | `TestREQ_CFG_004_ServeUnreadableExits2` | Ledger audit: only bad JSON was proven through `serve`; an unreadable config (a directory) must also exit 2 with one stderr line and start nothing |
 | TC-CLI-020 | REQ-CLI-001 | `TestREQ_CLI_001_CtrlCDropsReceivingConnection` | Ledger audit: the CLI-001 row did not run any test of "Ctrl+C drops receiving connections" |
 | TC-LOG-020 | REQ-LOG-001 | `TestREQ_LOG_001_FullLineForEmptyResetShutdown` | Ledger audit: the LOG-001 row never matched the full line for `empty`, `dropped: reset`, `dropped: shutdown` |
+| TC-RECV-028 | REQ-RECV-010 | `TestREQ_RECV_010_AcceptErrorRetriesAndPrintsNextJob` | review finding P1-1, 2026-11-07 |
+| TC-RECV-029 | REQ-RECV-007 | `TestREQ_RECV_007_ClientWaitsInBacklogUntilSlotFrees` | review finding P1-2, 2026-11-07 |
+| TC-CFG-045 | REQ-CFG-003 | `TestREQ_CFG_003_LeadingUTF8BOMIgnored` | review finding P2-2, 2026-11-07 |
+| TC-CFG-046 | REQ-CFG-005 | `TestREQ_CFG_005_TopLevelMustBeObject` | review finding P3-4, 2026-11-07 |
