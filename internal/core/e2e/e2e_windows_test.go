@@ -39,6 +39,17 @@ func powershell(script string) error {
 	return nil
 }
 
+// spoolerState dumps the queue, printer, port and output folder, so a failing run says where the job went.
+func spoolerState() string {
+	script := "Get-PrintJob -PrinterName " + psQuote(printerName) + " | Format-List *; " +
+		"Get-Printer -Name " + psQuote(printerName) + " | Format-List Name,PortName,DriverName,PrinterStatus,JobCount; " +
+		"Get-PrinterPort -Name " + psQuote(outFile) + " | Format-List *; " +
+		"Get-ChildItem -Force " + psQuote(filepath.Dir(outFile)) + " | Format-Table Name,Length; " +
+		"Get-WinEvent -LogName Microsoft-Windows-PrintService/Admin -MaxEvents 10 -ErrorAction SilentlyContinue | Format-List TimeCreated,Id,Message"
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	return fmt.Sprintf("(err %v)\n%s", err, out)
+}
+
 func psQuote(s string) string { return "'" + strings.Replace(s, "'", "''", -1) + "'" }
 
 func TestMain(m *testing.M) {
@@ -198,8 +209,8 @@ func TestREQ_E2E_001_BytesArriveInPrinterFileUnchanged(t *testing.T) {
 		}
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("output file has %d bytes, want %d identical bytes\ngot  % x\nwant % x\nstdout %s\nstderr %s",
-			len(got), len(want), got, want, s.stdout.String(), s.stderr.String())
+		t.Fatalf("output file has %d bytes, want %d identical bytes\ngot  % x\nwant % x\nstdout %s\nstderr %s\nspooler %s",
+			len(got), len(want), got, want, s.stdout.String(), s.stderr.String(), spoolerState())
 	}
 }
 
