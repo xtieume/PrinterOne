@@ -1,0 +1,702 @@
+#!/usr/bin/env python3
+"""PrinterOne harness: the few checks skills and goalrun cannot do themselves.
+
+  check <id> [--tests F]   run one registry check; PASS / FAIL / ERROR (a crash or 0 tests is never PASS)
+  rules-for <path…>        rules in .claude/rules/ that govern these paths (Codex runs this before editing)
+  lint-rules               rule/skill/role corpus and entry files stay consistent
+  spec-gate --base REF     CI: every product change traces to a spec; accepted specs stay frozen
+  accept <F> --pr N        write the acceptance receipt after the owner's merge (or /accept) and a green CI
+
+Run state lives in goalrun (installed testcase plugin, `.testcases/runs/`); the process lives in the skills
+`implement-feature` and `fix-bug`. Exit codes: 0 PASS · 1 FAIL · 2 ERROR · 3 STALE.
+Spec: docs/specs/2026-11-07-harness.md (adapted from the LaunchPadTV harness).
+"""
+import argparse
+import fnmatch
+import glob
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+PASS, FAIL, ERROR, STALE = 0, 1, 2, 3
+NAMES = {PASS: 'PASS', FAIL: 'FAIL', ERROR: 'ERROR', STALE: 'STALE'}
+ROOT = Path(__file__).resolve().parent.parent
+HDIR = ROOT / '.harness'
+RULES, SKILLS, AGENTS = ROOT / '.claude' / 'rules', ROOT / '.claude' / 'skills', ROOT / '.claude' / 'agents'
+FEATURE_RE = re.compile(r'^F-\d{3}$')
+BUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,39}$')
+RISKS = ('low', 'medium', 'high')
+ACCEPT_RE = re.compile(r'^/accept\s+(F-\d{3}-r\d+(?:-bug-[a-z0-9-]+)?)\s+([0-9a-f]{7,40})\s*$', re.M)
+FEATURE_LINE_RE = re.compile(r'^Feature:\s*(F-\d{3})(?:\s+bug\s+([a-z0-9][a-z0-9-]*))?\s*$', re.M)
+EXEMPT_RE = re.compile(r'^Spec-Exempt:\s*(\S.*)$', re.M)
+# Env passed to checks; everything else (tokens, keys) stays out of the child.
+ENV_KEEP = ('PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM',
+            'GOROOT', 'GOPATH', 'GOCACHE', 'GOMODCACHE', 'GOFLAGS', 'GOPROXY', 'GOTOOLCHAIN', 'DOCKER_HOST',
+            'CI', 'GITHUB_ACTIONS', 'RUNNER_TEMP', 'PYTHONPYCACHEPREFIX', 'PYTHONDONTWRITEBYTECODE', 'GOALRUN')
+SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|AUTH', re.I)
+SECRET_TEXT = re.compile(r'(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9-]{20,})')
+RECEIPT_FIELDS = ('receipt_id', 'feature', 'revision', 'run_id', 'spec', 'spec_sha256', 'reqs', 'base_sha',
+                  'head_sha', 'dependency_receipts', 'evidence', 'approval', 'manual_rows', 'accepted_at')
+
+
+class Stop(Exception):
+    """Abort a command with a facade exit code and one line of reason."""
+
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
+
+
+# ---------------------------------------------------------------- utilities
+
+def say(msg=''):
+    print(msg, flush=True)
+
+
+def sha256_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def load_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        raise Stop(ERROR, f'missing {rel(path)}')
+    except json.JSONDecodeError as e:
+        raise Stop(ERROR, f'{rel(path)} is not valid JSON: {e}')
+
+
+def atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    os.replace(tmp, path)
+
+
+def rel(path):
+    try:
+        return str(Path(path).resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def git(*args, check=True):
+    p = subprocess.run(['git', *args], cwd=ROOT, capture_output=True, text=True)
+    if check and p.returncode != 0:
+        raise Stop(ERROR, f'git {" ".join(args)}: {p.stderr.strip() or p.returncode}')
+    return p.stdout.strip()
+
+
+def is_ancestor(sha, ref='HEAD'):
+    return bool(re.fullmatch(r'[0-9a-f]{40}', str(sha))) and subprocess.run(
+        ['git', 'merge-base', '--is-ancestor', sha, ref], cwd=ROOT, capture_output=True).returncode == 0
+
+
+def redact(text):
+    for name, value in os.environ.items():
+        if value and len(value) >= 8 and SECRET_NAME.search(name):
+            text = text.replace(value, '[redacted]')
+    return SECRET_TEXT.sub('[redacted]', text)
+
+
+def matches(path, globs):
+    # fnmatch's * crosses '/', so "app/*" and "app/**" both cover the whole subtree.
+    return any(fnmatch.fnmatchcase(path, g) for g in globs)
+
+
+# ---------------------------------------------------------------- profile, features, receipts
+
+def profile():
+    return load_json(HDIR / 'profile.json')
+
+
+def features(text=None):
+    if text is not None:
+        return json.loads(text).get('features', [])
+    path = HDIR / 'features.json'
+    return load_json(path).get('features', []) if path.exists() else []
+
+
+def parse_dep(dep):
+    m = re.fullmatch(r'(F-\d{3})@(\d+)', dep) if isinstance(dep, str) else None
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def validate_features(feats, p):
+    errs, seen = [], set()
+    checks = p.get('checks') or {}
+    for f in feats:
+        fid = f.get('id', '?')
+        if not FEATURE_RE.match(str(fid)):
+            errs.append(f'{fid}: id must look like F-001')
+        if fid in seen:
+            errs.append(f'{fid}: duplicate feature id')
+        seen.add(fid)
+        if not isinstance(f.get('revision'), int) or f['revision'] < 1:
+            errs.append(f'{fid}: revision must be an integer >= 1')
+        for key in ('behavior', 'spec'):
+            if not str(f.get(key, '')).strip():
+                errs.append(f'{fid}: {key} is required')
+        if f.get('spec') and not (ROOT / f['spec']).is_file():
+            errs.append(f'{fid}: spec {f["spec"]} does not exist')
+        for key in ('acceptance', 'allowed_paths', 'required_checks'):
+            if not isinstance(f.get(key), list) or not f[key]:
+                errs.append(f'{fid}: {key} must be a non-empty list')
+        errs += [f'{fid}: required check {c} is not in the registry' for c in f.get('required_checks') or []
+                 if c not in checks]
+        if f.get('risk') not in RISKS:
+            errs.append(f'{fid}: risk must be one of {RISKS}')
+        errs += [f'{fid}: dependency {d!r} must look like F-001@1' for d in f.get('dependencies', []) if not parse_dep(d)]
+        # GitHub issues the feature answers; skill open-pr writes `Closes #N` for each
+        if not isinstance(f.get('issues', []), list) or any(type(i) is not int or i < 1 for i in f.get('issues', [])):
+            errs.append(f'{fid}: issues must be a list of GitHub issue numbers')
+    errs += [f'{f.get("id")}: dependency {parse_dep(d)[0]} is not a feature' for f in feats
+             for d in f.get('dependencies', []) if parse_dep(d) and parse_dep(d)[0] not in seen]
+    return errs
+
+
+def run_id(f, bug=None):
+    """Feature revision run, or a bug-fix run against an accepted revision (spec unchanged)."""
+    if bug is not None and not BUG_RE.match(bug):
+        raise Stop(ERROR, f'bug name {bug!r}: lowercase letters, digits and dashes')
+    return f'{f["id"]}-r{f["revision"]}' + (f'-bug-{bug}' if bug else '')
+
+
+def receipts(fid=None):
+    base = HDIR / 'acceptance'
+    out = []
+    for path in sorted(base.glob('F-*/*.json')) if base.exists() else []:
+        if fid and path.parent.name != fid:
+            continue
+        try:
+            r = json.loads(path.read_text(encoding='utf-8'))
+        except json.JSONDecodeError as e:
+            r = {'_invalid': f'not valid JSON: {e}'}
+        r['_path'] = path
+        out.append(r)
+    return out
+
+
+def receipt_errors(r, p, feats):
+    """What makes a receipt not count: shape, approver, run id, and the accepted commit's ancestry."""
+    if '_invalid' in r:
+        return [r['_invalid']]
+    missing = [k for k in RECEIPT_FIELDS if k not in r]
+    errs = [f'missing {", ".join(missing)}'] if missing else []
+    if r.get('feature') not in feats:
+        return errs + [f'feature {r.get("feature")} is not in features.json']
+    if r.get('feature') != r['_path'].parent.name:
+        errs.append('lives under the wrong feature directory')
+    if not re.fullmatch(rf'{r["feature"]}-r{r.get("revision")}(-bug-[a-z0-9-]+)?', str(r.get('run_id'))):
+        errs.append(f'run_id {r.get("run_id")} does not match {r["feature"]} r{r.get("revision")}')
+    if (r.get('approval') or {}).get('login') not in p.get('approvers', []):
+        errs.append('approval is not from an approver')
+    # a squash/rebase merge leaves the PR head out of main; its merge commit stands in for it
+    merge = (r.get('approval') or {}).get('merge_commit')
+    if not is_ancestor(r.get('head_sha')) and not (merge and is_ancestor(merge)):
+        errs.append(f'head_sha {str(r.get("head_sha"))[:7]} is not an ancestor of HEAD')
+    return errs
+
+
+def committed(path):
+    relpath = rel(path)
+    return not git('status', '--porcelain', '--', relpath) and bool(git('log', '-1', '--format=%H', '--', relpath, check=False))
+
+
+def accepted_receipt(fid, revision, p, feats):
+    """The receipt that accepts this feature revision (not a bug run), committed and valid."""
+    for r in receipts(fid):
+        if (r.get('revision') == revision and r.get('run_id') == f'{fid}-r{revision}'
+                and committed(r['_path']) and not receipt_errors(r, p, feats)):
+            return r
+    return None
+
+
+# ---------------------------------------------------------------- goalrun (installed testcase plugin)
+
+def goalrun_path(p=None):
+    """GOALRUN env, else the installed testcase plugin at the pinned version. Never a copy in this repo."""
+    if os.environ.get('GOALRUN'):
+        path = Path(os.environ['GOALRUN']).expanduser()
+        if not path.is_file():
+            raise Stop(ERROR, f'GOALRUN={path} does not exist')
+        return path
+    want = (p or profile())['goalrun']
+    pattern = os.path.expanduser(want['plugin_glob']).replace('{version}', want['version'])
+    found = sorted(glob.glob(pattern))
+    if not found:
+        raise Stop(ERROR, f'goalrun {want["version"]} not found ({pattern}): install/update the testcase plugin, or set GOALRUN')
+    return Path(found[-1])
+
+
+def inspect(rid):
+    p = subprocess.run([sys.executable, str(goalrun_path()), 'inspect', rid], cwd=ROOT, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise Stop(ERROR, f'goalrun inspect {rid}: {(p.stderr or p.stdout).strip()[-300:]}')
+    return json.loads(p.stdout)
+
+
+def ledger_rows(goal_dir):
+    path = Path(goal_dir) / 'ledger.tsv'
+    rows = []
+    for line in path.read_text(encoding='utf-8-sig').splitlines() if path.exists() else []:
+        if line.strip() and not line.startswith('#'):
+            cols = line.split('\t') + [''] * 5
+            rows.append({'id': cols[0].strip(), 'what': cols[1].strip(), 'check': cols[2].strip(),
+                         'deliverable': cols[3].strip(), 'break': cols[4].strip()})
+    return rows
+
+
+def run_reqs(goal_dir):
+    path = Path(goal_dir) / 'reqs.txt'
+    return sorted({l.strip() for l in path.read_text(encoding='utf-8').splitlines()
+                   if l.strip() and not l.startswith('#')}) if path.exists() else []
+
+
+def ledger_check_error(check, p):
+    """Why a ledger `check` cell is not exactly a registry call, or None.
+
+    goalrun runs the cell through `sh -c`, so a prefix test is not enough: the cell must split into
+    `scripts/harness check <id> [--tests <filter>]` and re-quote to the same text (no shell syntax)."""
+    if check.startswith('MANUAL:'):
+        return None if re.fullmatch(r'MANUAL:[A-Za-z0-9_.-]+', check) else 'bad MANUAL owner'
+    try:
+        argv = shlex.split(check)
+    except ValueError as e:
+        return f'unparseable: {e}'
+    if ' '.join(shlex.quote(a) for a in argv) != check:
+        # one exception: a glob in the --tests filter (gradle patterns) that the registry allows and that matches
+        # no file where goalrun runs it — `sh -c` then passes it through literally
+        quoted = [shlex.quote(a) for a in argv]
+        if not (len(argv) == 5 and ' '.join(quoted[:4] + [argv[4]]) == check and re.fullmatch(r'[A-Za-z0-9_.*]+', argv[4])):
+            return 'contains shell syntax'
+        if argv[:2] != ['scripts/harness', 'check'] or argv[3] != '--tests':
+            return 'must be `scripts/harness check <id> [--tests <filter>]`'
+        if glob.glob(str(ROOT / argv[4])):
+            return f'--tests {argv[4]!r} matches files in the repo root, so the shell would expand it'
+    if argv[:2] != ['scripts/harness', 'check'] or len(argv) not in (3, 5) or (len(argv) == 5 and argv[3] != '--tests'):
+        return 'must be `scripts/harness check <id> [--tests <filter>]`'
+    c = (p.get('checks') or {}).get(argv[2])
+    if c is None:
+        return f'unknown check {argv[2]}'
+    if c.get('kind') == 'exit':
+        return f'check {argv[2]} has kind exit: a crash under mutation cannot be told from a catch'
+    if len(argv) == 5 and not (c.get('tests_filter') and re.fullmatch(c['tests_filter'], argv[4])):
+        return f'--tests {argv[4]!r} not allowed for {argv[2]}'
+    return None
+
+
+# ---------------------------------------------------------------- check
+
+def missing_needs(c):
+    return [n for n in c.get('needs', [])
+            if (not (ROOT / n).exists() if '/' in n else shutil.which(n) is None)]
+
+
+def classify(kind, code, output, c, started):
+    """Return (result, reason). Missing tests and crashes are ERROR, never PASS."""
+    if code in (126, 127):
+        return ERROR, f'command not runnable (exit {code})'
+    if kind == 'gotest':
+        # `go test -json` (Go 1.10+): one JSON event per line; build errors and vet go to stderr as plain text
+        events = []
+        for line in output.splitlines():
+            if line.startswith('{'):
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        done = [e for e in events if e.get('Test') and e.get('Action') in ('pass', 'fail')]
+        failed = sorted({e['Test'] for e in done if e['Action'] == 'fail'})
+        if failed:
+            return FAIL, f'{len(failed)} failed: {", ".join(failed[:5])}'
+        if code != 0:
+            return ERROR, f'go exit {code} without a failing test (build error, vet, panic or setup)'
+        passed = len({(e.get('Package'), e['Test']) for e in done})
+        return (PASS, f'{passed} tests') if passed else (ERROR, 'no tests ran')
+    if kind == 'unittest':
+        ran = re.findall(r'^Ran (\d+) tests? in', output, re.M)
+        total = int(ran[-1]) if ran else 0
+        # ponytail: a test that asserts on a SyntaxError message reads as ERROR; name such tests differently.
+        if code != 0 and re.search(r'unittest\.loader\._FailedTest|Failed to import test module|^(SyntaxError|IndentationError):', output, re.M):
+            return ERROR, 'test module failed to load or compile'
+        if total == 0:
+            return ERROR, 'no tests ran'
+        if code != 0:
+            return FAIL, (re.findall(r'^FAILED \(.*\)$', output, re.M) or ['FAILED'])[-1]
+        return PASS, f'{total} tests'
+    return (PASS, 'exit 0') if code == 0 else (FAIL, f'exit {code}')
+
+
+def refusal(c, cid, tests):
+    """Why a check request must not run at all, or None."""
+    if c is None:
+        return f'unknown check id {cid!r} (not in .harness/profile.json)'
+    if tests is None and c.get('tests_required'):
+        return f'check {cid} runs one test file: pass --tests'
+    if tests is not None:
+        if not c.get('tests_filter'):
+            return f'check {cid} takes no --tests filter'
+        if not re.fullmatch(c['tests_filter'], tests):
+            return f'--tests {tests!r} does not match {c["tests_filter"]}'
+    missing = missing_needs(c)
+    return 'missing: ' + ', '.join(missing) if missing else None
+
+
+def cmd_check(a):
+    p = profile()
+    c = (p.get('checks') or {}).get(a.check_id)
+    reason = refusal(c, a.check_id, a.tests)
+    if reason:
+        result = ERROR
+    else:
+        argv = list(c['argv'])
+        if a.tests is not None:
+            argv += ([t.replace('{tests}', a.tests) for t in c['tests_template']]
+                     if c.get('tests_template') else ['--tests', a.tests])
+        timeout = c.get('timeout', 1800)
+        started, timed_out, chunks = time.time(), [], []
+        try:
+            proc = subprocess.Popen(argv, cwd=ROOT / c.get('cwd', '.'), stdin=subprocess.DEVNULL,
+                                    env={k: v for k, v in os.environ.items() if k in ENV_KEEP},
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError as e:
+            proc, result, reason = None, ERROR, f'cannot start: {e}'
+        if proc is not None:
+            def kill():
+                timed_out.append(True)
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            timer = threading.Timer(timeout, kill)
+            timer.start()
+            for raw in proc.stdout:
+                line = redact(raw.decode('utf-8', errors='replace'))
+                chunks.append(line)
+                sys.stdout.write(line)
+            code = proc.wait()
+            timer.cancel()
+            result, reason = ((ERROR, f'timed out after {timeout}s') if timed_out
+                              else classify(c['kind'], code, ''.join(chunks), c, started))
+    # goalrun stores this line with each check, so a mutation that crashed can be told from one that was caught.
+    say(f'HARNESS-RESULT: {NAMES[result]} {a.check_id} {reason}')
+    return result
+
+
+# ---------------------------------------------------------------- rules corpus
+
+def frontmatter(path):
+    """The YAML subset our rule/skill/agent headers use: `key: value` and `key:` + `  - item` lists."""
+    text = path.read_text(encoding='utf-8')
+    end = text.find('\n---', 4) if text.startswith('---\n') else -1
+    if end < 0:
+        return None
+    meta, key = {}, None
+    for line in text[4:end].splitlines():
+        m = re.match(r'^([A-Za-z_-]+):\s*(.*)$', line)
+        if m:
+            key, value = m.group(1), m.group(2).strip().strip('"')
+            meta[key] = value if value else []
+        elif key and re.match(r'^\s+-\s+', line) and isinstance(meta.get(key), list):
+            meta[key].append(re.sub(r'^\s+-\s+', '', line).strip().strip('"'))
+    return meta
+
+
+def rule_globs(meta):
+    paths = meta.get('paths')
+    return [paths] if isinstance(paths, str) and paths else (paths or [])
+
+
+def rules_for(paths):
+    """Unconditional rules plus every rule whose `paths:` glob matches one of the paths."""
+    out = []
+    for path in sorted(RULES.glob('*.md')) if RULES.is_dir() else []:
+        globs = rule_globs(frontmatter(path) or {})
+        hits = [x for x in paths if matches(x, globs)] if globs else []
+        if not globs or hits:
+            out.append((rel(path), hits[:3]))
+    return out
+
+
+def cmd_rules_for(a):
+    paths = list(a.paths) or [l.strip() for l in sys.stdin if l.strip()]
+    if not paths:
+        raise Stop(ERROR, 'give paths as arguments or on stdin')
+    missing = [x for x in paths if not (ROOT / x).exists()]
+    if missing and not a.allow_missing:
+        raise Stop(ERROR, f'no such path: {", ".join(missing)} (pass --allow-missing for files about to be created)')
+    for path, hits in rules_for(paths):
+        say(path + (f'   ← {", ".join(hits)}' if hits else '   (always)'))
+    return PASS
+
+
+def cmd_lint_rules(a):
+    p = profile()
+    errs, files = [], git('ls-files').splitlines()
+    rule_names = set()
+    for path in sorted(RULES.glob('*.md')) if RULES.is_dir() else []:
+        rule_names.add(path.stem)
+        meta = frontmatter(path)
+        if meta is None or not meta.get('description'):
+            errs.append(f'{rel(path)}: frontmatter needs a description')
+            continue
+        errs += [f'{rel(path)}: paths glob {g!r} matches no tracked file' for g in rule_globs(meta)
+                 if not any(matches(f, [g]) for f in files)]
+    skills = set()
+    for skill in sorted(SKILLS.glob('*/SKILL.md')) if SKILLS.is_dir() else []:
+        skills.add(skill.parent.name)
+        meta = frontmatter(skill) or {}
+        if meta.get('name') != skill.parent.name or not meta.get('description'):
+            errs.append(f'{rel(skill)}: needs name: {skill.parent.name} and a description')
+    roles = set()
+    for path in sorted(AGENTS.glob('*.md')) if AGENTS.is_dir() else []:
+        roles.add(path.stem)
+        meta = frontmatter(path) or {}
+        if meta.get('name') != path.stem or not meta.get('description'):
+            errs.append(f'{rel(path)}: needs name: {path.stem} and a description')
+    known = skills | set(p.get('external_skills', []))
+    docs = [ROOT / 'CLAUDE.md', ROOT / 'AGENTS.md'] + sorted(RULES.glob('*.md')) + sorted(AGENTS.glob('*.md')) \
+        + sorted(SKILLS.glob('*/SKILL.md'))
+    for doc in (d for d in docs if d.exists()):
+        text = doc.read_text(encoding='utf-8')
+        errs += [f'{rel(doc)}: names unknown skill {n}' for n in re.findall(r'skill `([a-z0-9:-]+)`', text) if n not in known]
+        errs += [f'{rel(doc)}: names unknown role {n}' for n in re.findall(r'role `([a-z0-9-]+)`', text) if n not in roles]
+        errs += [f'{rel(doc)}: names unknown rule {n}' for n in re.findall(r'rule `(\d\d-[a-z0-9-]+)`', text)
+                 if n not in rule_names]
+        errs += [f'{rel(doc)}: points at missing {r}' for r in re.findall(r'`((?:\.claude|\.harness|docs|scripts)/[^`*{}<>\s]+)`', text)
+                 if not r.startswith('.harness/acceptance/') and not (ROOT / r.rstrip('/')).exists()]
+    for name, limit in p.get('entry_limits', {}).items():
+        if (ROOT / name).exists() and len((ROOT / name).read_text(encoding='utf-8').splitlines()) > limit:
+            errs.append(f'{name}: over {limit} lines — move path-specific guidance into .claude/rules/')
+    if errs:
+        say('RULES FAIL\n' + '\n'.join(f'  - {e}' for e in errs))
+        return FAIL
+    say(f'RULES PASS — {len(rule_names)} rules, {len(skills)} skills, {len(roles)} roles')
+    return PASS
+
+
+# ---------------------------------------------------------------- spec-gate
+
+def cmd_spec_gate(a):
+    """Every product change traces to a spec; an accepted spec only changes with a new revision."""
+    p = profile()
+    head = {f.get('id'): f for f in features()}
+    base_text = subprocess.run(['git', 'show', f'{a.base}:.harness/features.json'], cwd=ROOT,
+                               capture_output=True, text=True)
+    base = {f.get('id'): f for f in features(base_text.stdout)} if base_text.returncode == 0 else {}
+    status = [l.split('\t', 1) for l in git('diff', '--name-status', '--no-renames', f'{a.base}...HEAD').splitlines() if l]
+    files = [f for _, f in status]
+    body = Path(a.pr_body_file).read_text(encoding='utf-8') if a.pr_body_file else os.environ.get('PR_BODY', '')
+    declared = FEATURE_LINE_RE.findall(body or '')
+    errs = validate_features(list(head.values()), p)
+    errs += [f'{rel(r["_path"])}: {e}' for r in receipts() for e in receipt_errors(r, p, head)]
+    errs += [f'{f}: receipts are append-only (deleting or editing one would thaw an accepted spec)'
+             for st, f in status if f.startswith('.harness/acceptance/') and st != 'A']
+    covered = []
+    for fid, bug in declared:
+        f = head.get(fid)
+        if f is None:
+            errs.append(f'PR names {fid}, which is not in features.json')
+            continue
+        covered += f.get('allowed_paths', [])
+        if bug:
+            old = base.get(fid) or {}
+            if f.get('spec') in files or old.get('revision') != f.get('revision') or old.get('spec') != f.get('spec'):
+                errs.append(f'{fid} bug {bug}: a bug fix keeps the spec and revision; a spec change is a feature revision')
+            if not accepted_receipt(fid, f['revision'], p, head):
+                errs.append(f'{fid} bug {bug}: r{f["revision"]} has no committed receipt — fix it in the feature run')
+    for fid, f in head.items():
+        old = base.get(fid)
+        bumped = old is None or old.get('revision') != f.get('revision')
+        if bumped and f.get('spec') not in files:
+            errs.append(f'{fid}: r{f.get("revision")} is new but its spec {f.get("spec")} is unchanged')
+        moved = old is not None and old.get('spec') != f.get('spec')
+        if not bumped and (f.get('spec') in files or moved) and accepted_receipt(fid, f['revision'], p, head):
+            what = f'spec moved {old.get("spec")} → {f.get("spec")}' if moved else f'spec {f["spec"]} changed'
+            errs.append(f'{fid}: {what} after r{f["revision"]} was accepted — bump the revision')
+    uncovered = [f for f in files if matches(f, p.get('product_paths', [])) and not matches(f, covered)]
+    exempt = EXEMPT_RE.search(body or '')
+    if uncovered and not exempt:
+        errs.append('product files outside every `Feature:` line of the PR body: ' + ', '.join(uncovered))
+    if errs:
+        say('SPEC-FIRST FAIL\n' + '\n'.join(f'  - {e}' for e in errs))
+        say('Route: spec → feature revision (skill implement-feature), or a bug against an accepted spec '
+            '(skill fix-bug). PR body lines: `Feature: F-00N` / `Feature: F-00N bug <name>`; '
+            '`Spec-Exempt: <reason>` only when no behaviour changes.')
+        return FAIL
+    if uncovered:
+        say(f'SPEC-EXEMPT ({exempt.group(1)}) — owner, check these by hand: {", ".join(uncovered)}')
+    named = ', '.join(f'{i} bug {b}' if b else i for i, b in declared) or 'none'
+    say(f'SPEC-FIRST PASS — {len(files)} files, features: {named}')
+    return PASS
+
+
+# ---------------------------------------------------------------- accept
+
+def gh_json(*args, pages=False):
+    """One `gh api` call; pages=True follows every page and returns them as one list."""
+    extra = ['--paginate', '--slurp'] if pages else []
+    p = subprocess.run(['gh', 'api', *extra, *args], cwd=ROOT, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise Stop(ERROR, f'gh api {args[0]}: {p.stderr.strip()[-300:]}')
+    try:
+        data = json.loads(p.stdout or 'null')
+        return [item for page in data for item in page] if pages else data
+    except json.JSONDecodeError:
+        raise Stop(ERROR, f'gh api {args[0]}: not JSON')
+
+
+def merged_base_sha(pr, head, run=None):
+    """Where the work of a merged PR started. merge-base(main, head) is the head itself once merged, so take
+    merge-base(first parent of the merge commit, head); without that commit locally, the PR's base commit."""
+    run = run or (lambda *args: git(*args, check=False))
+    mc = pr.get('merge_commit_sha') or ''
+    fork = run('merge-base', f'{mc}^1', head) if re.fullmatch(r'[0-9a-f]{40}', mc) else ''
+    return fork or (pr.get('base') or {}).get('sha') or None
+
+
+def cmd_accept(a):
+    p = profile()
+    feats = {f.get('id'): f for f in features()}
+    f = feats.get(a.feature)
+    if f is None or [e for e in validate_features(list(feats.values()), p) if e.startswith(f'{a.feature}:')]:
+        raise Stop(FAIL, f'{a.feature}: not a valid feature in features.json')
+    rid = run_id(f, a.bug)
+    if git('status', '--porcelain', '--untracked-files=no'):
+        raise Stop(ERROR, 'commit everything first: a receipt names one exact tree')
+    view = inspect(rid)
+    proof = view.get('last_proof') or {}
+    if not proof.get('whole_ledger_verified') or view.get('proof_stale'):
+        raise Stop(STALE, f'{rid}: no current whole-ledger proof ({view.get("proof_stale_because")}); '
+                          f'run goalrun --verify on this commit')
+    rows = ledger_rows(view['paths']['goalrun_dir'])
+    bad = [f'{r["id"]} ({e})' for r in rows if (e := ledger_check_error(r['check'], p))]
+    if bad:
+        raise Stop(ERROR, f'ledger rows outside the registry: {"; ".join(bad)}')
+    crashed = []
+    for path in sorted((Path(view['paths']['run_dir']) / 'evidence').glob(f'{proof["id"]}-check-*.json')):
+        entry = json.loads(path.read_text(encoding='utf-8'))
+        if entry.get('phase') == 'mutation' and 'HARNESS-RESULT: ERROR' in (entry.get('output') or ''):
+            crashed.append(str(entry.get('row_id')))
+    if crashed:
+        raise Stop(ERROR, f'breaks of rows {", ".join(crashed)} crashed the check instead of failing a test')
+    reqs = run_reqs(view['paths']['goalrun_dir'])
+    if a.bug:
+        accepted = accepted_receipt(f['id'], f['revision'], p, feats)
+        if not accepted:
+            raise Stop(ERROR, f'{f["id"]} r{f["revision"]} has no committed receipt to fix a bug against')
+        new = sorted(set(reqs) - set(accepted.get('reqs', [])))
+        if new:
+            raise Stop(FAIL, f'{", ".join(new)} not in the accepted spec of r{f["revision"]}: the spec was silent — '
+                             f'this is a spec change (skill implement-feature), not a bug fix')
+    repo = a.repo or gh_json('repos/{owner}/{repo}')['full_name']
+    pr = gh_json(f'repos/{repo}/pulls/{a.pr}')
+    head = git('rev-parse', 'HEAD')
+    # a PR merged before its receipt still accepts: the receipt names the PR head, which is now in main
+    merged = pr.get('state') == 'closed' and bool(pr.get('merged_at'))
+    if not (pr.get('state') == 'open' or merged) or (pr.get('base') or {}).get('ref') != p.get('base_branch', 'main'):
+        raise Stop(ERROR, f'PR #{a.pr} must be open or merged against {p.get("base_branch", "main")}')
+    if pr['head']['sha'] != head:
+        raise Stop(ERROR, f'PR head {pr["head"]["sha"][:7]} is not local HEAD {head[:7]}; push or pull first')
+    base_ref = f'origin/{p.get("base_branch", "main")}'
+    merge_commit = (pr.get('merge_commit_sha') or '') if merged else ''
+    if merged and not (is_ancestor(head, base_ref) or (merge_commit and is_ancestor(merge_commit, base_ref))):
+        # any merge method counts, but what landed must be in local main: the receipt is checked against it later
+        raise Stop(ERROR, f'PR #{a.pr}: neither head {head[:7]} nor merge commit {merge_commit[:7] or "?"} '
+                          f'is in {base_ref}; git fetch origin first')
+    runs = gh_json(f'repos/{repo}/commits/{head}/check-runs?check_name=verify&per_page=100').get('check_runs', [])
+    runs = [r for r in runs if r.get('name') == 'verify' and (r.get('app') or {}).get('slug') == 'github-actions']
+    latest = max(runs, key=lambda r: r.get('id', 0)) if runs else None
+    if not latest or latest.get('conclusion') != 'success':
+        state = (latest.get('conclusion') or latest.get('status')) if latest else 'missing'
+        raise Stop(ERROR, f'latest `verify` run for {head[:7]} is {state} (no branch protection, so accept enforces it)')
+    approval = None
+    for c in gh_json(f'repos/{repo}/issues/{a.pr}/comments?per_page=100', pages=True):
+        # the comment names the exact commit, so a clock or an older push cannot satisfy it
+        if c['user']['login'] in p['approvers'] and any(
+                cid == rid and head.startswith(sha) for cid, sha in ACCEPT_RE.findall(c.get('body') or '')):
+            approval = c
+    merger = (pr.get('merged_by') or {}).get('login')
+    if not approval and merged and merger in p['approvers']:
+        # the owner merging the PR is the acceptance. pr.head.sha is the branch's head now, not at merge time; a push
+        # after the merge needs its own green `verify` run (checked above), which a closed PR never gets
+        approval = {'html_url': pr.get('html_url'), 'user': {'login': merger}, 'created_at': pr.get('merged_at'),
+                    'merge_commit': merge_commit}
+    if not approval:
+        raise Stop(ERROR, f'PR #{a.pr} is not merged by {", ".join(p["approvers"])} and has no '
+                          f'`/accept {rid} {head[:7]}` comment from them')
+    deps = []
+    for dep in f.get('dependencies', []):
+        r = accepted_receipt(*parse_dep(dep), p, feats)
+        if not r:
+            raise Stop(ERROR, f'dependency {dep} has no committed receipt')
+        deps.append(r['receipt_id'])
+    if merged:
+        base_sha = merged_base_sha(pr, head)
+    else:
+        base_sha = git('merge-base', f'origin/{p.get("base_branch", "main")}', 'HEAD', check=False) or None
+    stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+    receipt = {
+        'receipt_id': f'{rid}-{stamp}', 'feature': f['id'], 'revision': f['revision'], 'run_id': rid,
+        'spec': f['spec'], 'spec_sha256': sha256_file(ROOT / f['spec']), 'reqs': reqs,
+        'base_sha': base_sha,
+        'head_sha': head, 'dependency_receipts': deps,
+        'evidence': {'goalrun_proof': proof['id'], 'ci_check_run': latest.get('html_url')},
+        'approval': {'pr': a.pr, 'comment': approval.get('html_url'), 'login': approval['user']['login'],
+                     'at': approval.get('created_at'), 'merge_commit': merge_commit or None},
+        'manual_rows': [{'id': r['id'], 'what_sha256': hashlib.sha256(r['what'].encode()).hexdigest()}
+                        for r in rows if r['check'].startswith('MANUAL:')],
+        'accepted_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+    path = HDIR / 'acceptance' / f['id'] / f'{receipt["receipt_id"]}.json'
+    atomic_write(path, json.dumps(receipt, indent=2) + '\n')
+    say(f'wrote {rel(path)}. ' + ('The PR is merged: commit the receipt on a new branch from the base branch and open a new PR.'
+                                  if merged else 'Commit + push it; CI re-runs, then the owner merges.'))
+    return PASS
+
+
+# ---------------------------------------------------------------- main
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog='scripts/harness', description=__doc__.split('\n')[0])
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    s = sub.add_parser('check', help='run one registry check')
+    s.add_argument('check_id')
+    s.add_argument('--tests', help="test filter, validated against the check's tests_filter")
+    s = sub.add_parser('rules-for', help='rules governing these paths')
+    s.add_argument('paths', nargs='*')
+    s.add_argument('--allow-missing', action='store_true')
+    sub.add_parser('lint-rules', help='gate for .claude/rules, skills, agents and entry files')
+    s = sub.add_parser('spec-gate', help='CI: every product change traces to a spec')
+    s.add_argument('--base', required=True)
+    s.add_argument('--pr-body-file')
+    s = sub.add_parser('accept', help="write a receipt after the owner's merge (or /accept) + green CI")
+    s.add_argument('feature')
+    s.add_argument('--pr', type=int, required=True)
+    s.add_argument('--bug')
+    s.add_argument('--repo')
+    a = ap.parse_args(argv)
+    try:
+        return globals()['cmd_' + a.cmd.replace('-', '_')](a)
+    except Stop as e:
+        say(f'{NAMES[e.code]} — {e}')
+        return e.code
+    except Exception:  # an unexpected crash is never FAIL: the contract reserves 1 for a real finding
+        import traceback
+        traceback.print_exc()
+        say('ERROR — harness crashed (traceback above)')
+        return ERROR
+
+
+if __name__ == '__main__':
+    sys.exit(main())

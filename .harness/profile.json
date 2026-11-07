@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "base_branch": "master",
+  "approvers": [
+    "xtieume"
+  ],
+  "goalrun": {
+    "repo": "https://github.com/xtieume/testcase",
+    "commit": "811784b7f153190e7934e2341972533db3aaaa22",
+    "version": "1.17.1",
+    "plugin_glob": "~/.claude/plugins/cache/testcase-marketplace/testcase/{version}/.agents/skills/goalrun/scripts/goalrun.py",
+    "note": "Never copied into this repo. Local: the installed testcase plugin at this version (or GOALRUN=<path>). CI: fetched at this commit."
+  },
+  "checks": {
+    "go-test": {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "./..."
+      ],
+      "kind": "gotest",
+      "needs": [
+        "go"
+      ],
+      "paths": [
+        "cmd/*",
+        "internal/*",
+        "go.mod",
+        "go.sum"
+      ],
+      "tests_template": [
+        "-run",
+        "{tests}"
+      ],
+      "tests_filter": "^[A-Za-z0-9_]+$",
+      "timeout": 900
+    },
+    "go-vet": {
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "kind": "exit",
+      "needs": [
+        "go"
+      ],
+      "paths": [
+        "cmd/*",
+        "internal/*",
+        "go.mod",
+        "go.sum"
+      ],
+      "timeout": 600
+    },
+    "win-build": {
+      "argv": [
+        "env",
+        "GOOS=windows",
+        "GOARCH=amd64",
+        "go",
+        "vet",
+        "./..."
+      ],
+      "kind": "exit",
+      "needs": [
+        "go"
+      ],
+      "paths": [
+        "cmd/*",
+        "internal/*",
+        "go.mod",
+        "go.sum"
+      ],
+      "timeout": 600
+    },
+    "core-go110": {
+      "argv": [
+        "scripts/go110"
+      ],
+      "kind": "gotest",
+      "needs": [
+        "docker",
+        "scripts/go110"
+      ],
+      "paths": [
+        "internal/core/*",
+        "cmd/printerone-legacy/*",
+        "scripts/go110"
+      ],
+      "tests_template": [
+        "-run",
+        "{tests}"
+      ],
+      "tests_filter": "^[A-Za-z0-9_]+$",
+      "timeout": 1200
+    },
+    "harness-selftest": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        ".harness/tests"
+      ],
+      "kind": "unittest",
+      "needs": [
+        "python3",
+        "git",
+        "go"
+      ],
+      "paths": [
+        ".harness/*",
+        "scripts/harness",
+        ".claude/*",
+        ".github/workflows/verify.yml",
+        ".githooks/*",
+        ".agents/*",
+        "CLAUDE.md",
+        "AGENTS.md"
+      ],
+      "timeout": 900
+    }
+  },
+  "always_checks": [
+    "harness-selftest"
+  ],
+  "not_applicable": {
+    "windows-e2e": "Added with F-001: windows-latest runner, a Generic / Text Only printer printing to a file.",
+    "xp-win7-run": "No CI runner has XP or Windows 7; MANUAL:admin rows on the owner VM."
+  },
+  "branch_protection": "not configured — accept requires a green `verify` run for the PR head; the owner checks CI before merging",
+  "product_paths": [
+    "cmd/*",
+    "internal/*",
+    "static/*"
+  ],
+  "external_skills": [
+    "testcase",
+    "goalrun",
+    "docs-review",
+    "code-review-expert"
+  ],
+  "entry_limits": {
+    "CLAUDE.md": 120,
+    "AGENTS.md": 40
+  }
+}

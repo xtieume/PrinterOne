@@ -1,0 +1,108 @@
+name: Verify
+
+# Independent runner for the project harness (docs/specs/2026-11-07-harness.md).
+# Every PR into master: rule-corpus lint, the spec-first gate, and the registry checks whose paths changed
+# (plus always_checks). The job named `verify` is the one stable result: `scripts/harness accept` refuses a
+# receipt unless it is green for the PR head. The owner checks it before merging.
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      checks: ${{ steps.plan.outputs.checks }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rule corpus
+        run: scripts/harness lint-rules
+      - name: Spec first
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: scripts/harness spec-gate --base "origin/${{ github.base_ref }}"
+      - id: plan
+        name: Affected checks
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            base=origin/${{ github.base_ref }}
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            base=$BEFORE
+          else
+            base=HEAD~1
+          fi
+          checks=$(git diff --name-only --no-renames "$base...HEAD" | python3 -c '
+          import fnmatch, json, sys
+          p = json.load(open(".harness/profile.json"))
+          files = [l.strip() for l in sys.stdin if l.strip()]
+          # same matching as scripts/harness matches(); checks that need --tests run only from ledger rows
+          hit = {c for c, d in p["checks"].items() if not d.get("tests_required")
+                 and any(fnmatch.fnmatchcase(f, g) for f in files for g in d.get("paths", []))}
+          print(json.dumps(sorted(hit | set(p.get("always_checks", [])))))')
+          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+          echo "checks: $checks"
+
+  check:
+    needs: plan
+    if: needs.plan.outputs.checks != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        check: ${{ fromJson(needs.plan.outputs.checks) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: goalrun from the pinned testcase commit (never copied into this repo)
+        if: matrix.check == 'harness-selftest'
+        run: |
+          set -euo pipefail
+          read -r repo commit < <(python3 -c 'import json; g=json.load(open(".harness/profile.json"))["goalrun"]; print(g["repo"], g["commit"])')
+          dir="$RUNNER_TEMP/testcase"
+          git init -q "$dir"
+          git -C "$dir" remote add origin "$repo"
+          git -C "$dir" fetch -q --depth 1 origin "$commit"
+          git -C "$dir" checkout -q FETCH_HEAD
+          echo "GOALRUN=$dir/.agents/skills/goalrun/scripts/goalrun.py" >> "$GITHUB_ENV"
+      - name: check
+        run: scripts/harness check ${{ matrix.check }}
+
+  verify:
+    needs: [plan, check]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All harness gates
+        env:
+          RESULTS: ${{ toJson(needs) }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          bad = {k: v['result'] for k, v in json.loads(os.environ['RESULTS']).items()
+                 if v['result'] not in ('success', 'skipped')}
+          if bad:
+              sys.exit(f'FAIL: {bad}')
+          print('PASS: every harness gate is green')
+          EOF

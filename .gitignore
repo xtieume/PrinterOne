@@ -1,10 +1,12 @@
+# Go build output
+/dist/
+/bin/
+*.exe
 
-*.pdf
+# Harness run state (goalrun) — never committed
+.testcases/
 
-# Build folders
-build/
-*.spec
-
+# Local tooling
+.code-review-graph/
 __pycache__/
-
 logs/
