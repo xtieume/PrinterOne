@@ -172,6 +172,41 @@
         "F-001@1",
         "F-008@1"
       ]
+    },
+    {
+      "id": "F-004",
+      "revision": 1,
+      "behavior": "Per-printer IP/CIDR allowlist; other clients closed unread and logged as rejected",
+      "spec": "docs/specs/2026-11-07-f004-allowlist.md",
+      "acceptance": [
+        "REQ-ALLOW-001",
+        "REQ-ALLOW-002",
+        "REQ-ALLOW-003",
+        "REQ-ALLOW-004",
+        "REQ-ALLOW-005",
+        "REQ-ALLOW-006",
+        "REQ-ALLOW-007",
+        "REQ-ALLOW-008",
+        "REQ-ALLOW-009"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110"
+      ],
+      "risk": "high",
+      "issues": [
+        2
+      ],
+      "dependencies": [
+        "F-003@1"
+      ]
     }
   ]
 }
