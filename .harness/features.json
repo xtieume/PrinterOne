@@ -257,6 +257,35 @@
         "F-004@1",
         "F-008@1"
       ]
+    },
+    {
+      "id": "F-006",
+      "revision": 1,
+      "behavior": "Legacy executable for Windows XP to 8 with the full feature set",
+      "spec": "docs/specs/2026-11-07-f006-legacy.md",
+      "acceptance": [
+        "REQ-LEGACY-001",
+        "REQ-LEGACY-002",
+        "REQ-LEGACY-003",
+        "REQ-LEGACY-004",
+        "REQ-LEGACY-005"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "core-go110"
+      ],
+      "risk": "medium",
+      "issues": [
+        7
+      ],
+      "dependencies": [
+        "F-005@1"
+      ]
     }
   ]
 }

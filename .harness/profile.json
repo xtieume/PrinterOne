@@ -150,6 +150,23 @@
       "tests_filter": "^[A-Za-z0-9_]+$",
       "timeout": 900,
       "note": "Runs on windows-latest in verify.yml; on other OSes it finds no test and is ERROR."
+    },
+    "release-build": {
+      "argv": [
+        "scripts/build-release",
+        "v0.0.0-ci"
+      ],
+      "kind": "exit",
+      "needs": [
+        "go",
+        "docker",
+        "scripts/build-release"
+      ],
+      "paths": [
+        "scripts/build-release",
+        ".github/workflows/release.yml"
+      ],
+      "timeout": 1200
     }
   },
   "always_checks": [
