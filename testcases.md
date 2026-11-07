@@ -432,3 +432,5 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-UI-087 | REQ-UI-004 | `TestREQ_UI_004_PasswordLengthInCharacters` | Password length counted in characters; catches: `len()` counts bytes |
 | TC-UI-088 | REQ-UI-015 | `TestREQ_UI_015_NoInlineHandlers` | No inline handlers or `javascript:` URLs in templates; catches: function reachable only through JS |
 | TC-UI-089 | REQ-UI-011 | `TestREQ_UI_011_RefreshWithoutJS` | Log page has a refresh that works without JS; catches: refresh only through JS |
+| TC-UI-090 | REQ-UI-021 | `TestREQ_UI_021_RejectsForeignHostWhenRemoteOff` | spec Q5, 2026-11-07 |
+| TC-UI-091 | REQ-UI-022 | `TestREQ_UI_022_AllResponsesDenyFraming` | spec Q5, 2026-11-07 |

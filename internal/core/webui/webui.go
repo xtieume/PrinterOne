@@ -26,7 +26,14 @@ package webui
 //go:generate go run gen/main.go ../../../static assets_gen.go
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net"
 	"net/http"
+	"os/exec"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/xtieume/PrinterOne/internal/core/allow"
@@ -65,43 +72,72 @@ type Deps struct {
 
 // Server is the UI's http.Handler.
 type Server struct {
-	d Deps
+	d               Deps
+	mu              sync.Mutex
+	token           string
+	restartRequired bool
 }
 
 // New returns the UI handler for d.
 func New(d Deps) *Server {
-	return &Server{d: d}
+	if d.Token == "" {
+		b := make([]byte, 24)
+		if _, err := rand.Read(b); err == nil {
+			d.Token = hex.EncodeToString(b)
+		} else {
+			d.Token = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+	}
+	return &Server{d: d, token: d.Token}
 }
 
 // Token is the per-process token every form and API write must carry.
 func (s *Server) Token() string {
-	return ""
+	return s.token
 }
 
 // ServeHTTP serves every route listed in the package comment.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {}
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.serveHTTP(w, r) }
 
 // URL is the address the UI is opened at: http://127.0.0.1:<port>/ (also with remote access on).
 func URL(port int) string {
-	return ""
+	return fmt.Sprintf("http://127.0.0.1:%d/", port)
 }
 
 // Start binds the UI on 127.0.0.1:<ui.Port>, or 0.0.0.0:<ui.Port> (tcp4) with ui.Remote, and serves h in the
 // background. Port 0 picks a free port (tests). open, non-nil only for `printerone` with no arguments, is called
 // once with URL(<bound port>) after the bind. addr is the bound address; stop closes the listener.
 func Start(ui config.UI, h http.Handler, open func(url string) error) (addr string, stop func(), err error) {
-	return "", func() {}, nil
+	host := "127.0.0.1"
+	if ui.Remote {
+		host = "0.0.0.0"
+	}
+	ln, err := net.Listen("tcp4", net.JoinHostPort(host, strconv.Itoa(ui.Port)))
+	if err != nil {
+		return "", nil, err
+	}
+	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
+	go server.Serve(ln)
+	addr = ln.Addr().String()
+	if open != nil {
+		_, port, _ := net.SplitHostPort(addr)
+		_ = open(URL(mustPort(port)))
+	}
+	return addr, func() { server.Close() }, nil
 }
+
+func mustPort(v string) int { n, _ := strconv.Atoi(v); return n }
 
 // BrowserCommand is the command that opens url in the default browser on XP to 11:
 // rundll32 url.dll,FileProtocolHandler <url>.
 func BrowserCommand(url string) []string {
-	return nil
+	return []string{"rundll32", "url.dll,FileProtocolHandler", url}
 }
 
 // OpenBrowser runs BrowserCommand(url) without waiting for it.
 func OpenBrowser(url string) error {
-	return nil
+	args := BrowserCommand(url)
+	return exec.Command(args[0], args[1:]...).Start()
 }
 
 // ListenFunc starts one printer's receiver; stop shuts it down gracefully (F-001 shutdown: jobs already received
@@ -111,11 +147,80 @@ type ListenFunc func(p config.Printer, a allow.List) (stop func(), err error)
 // Listeners keeps one running receiver per printer and restarts, on Apply, only those whose port, Windows printer
 // or allowlist changed (a name-only change keeps the running listener).
 type Listeners struct {
-	Listen ListenFunc
+	Listen  ListenFunc
+	running map[string]listener
+	mu      sync.Mutex
 }
 
 // Apply makes the running listeners match c: stops removed and changed ones, starts new and changed ones, leaves
 // the others running. A start error is returned after the rest were applied.
 func (l *Listeners) Apply(c *config.Config) error {
-	return nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.Listen == nil {
+		return nil
+	}
+	if c == nil {
+		c = &config.Config{}
+	}
+	if l.running == nil {
+		l.running = make(map[string]listener)
+	}
+	next := make(map[string]listener)
+	stopped := make(map[string]bool)
+	var first error
+	for i, p := range c.Printers {
+		var a allow.List
+		if i < len(c.Allow) {
+			a = c.Allow[i]
+		}
+		key := listenerKey(p, a)
+		found := ""
+		for name, old := range l.running {
+			if old.key == key {
+				found = name
+				break
+			}
+		}
+		if found != "" {
+			next[p.Name] = l.running[found]
+			continue
+		}
+		old, hadOld := l.running[p.Name]
+		if hadOld {
+			old.stop()
+			stopped[p.Name] = true
+		}
+		stop, err := l.Listen(p, a)
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		next[p.Name] = listener{key: key, stop: stop}
+	}
+	for name, old := range l.running {
+		kept := false
+		for _, current := range next {
+			if current.key == old.key {
+				kept = true
+				break
+			}
+		}
+		if !kept && !stopped[name] {
+			old.stop()
+		}
+	}
+	l.running = next
+	return first
+}
+
+type listener struct {
+	key  string
+	stop func()
+}
+
+func listenerKey(p config.Printer, a allow.List) string {
+	return fmt.Sprintf("%d\x00%s\x00%s", p.Port, p.Printer, a.String())
 }

@@ -1,0 +1,8 @@
+@supports (display: grid) {
+body { background: #f4f6f8; color: #17212b; font-family: system-ui, sans-serif; }
+#app { max-width: 1100px; padding: 24px; background: white; box-shadow: 0 2px 12px #ccd2d8; }
+nav { border-radius: 4px; }
+th { background: #e9f0f6; }
+form { border-radius: 4px; }
+button { padding: 8px 14px; cursor: pointer; }
+}

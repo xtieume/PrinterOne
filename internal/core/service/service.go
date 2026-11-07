@@ -16,10 +16,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xtieume/PrinterOne/internal/core/allow"
 	"github.com/xtieume/PrinterOne/internal/core/config"
 	"github.com/xtieume/PrinterOne/internal/core/logfile"
 	"github.com/xtieume/PrinterOne/internal/core/receiver"
 	"github.com/xtieume/PrinterOne/internal/core/spool"
+	"github.com/xtieume/PrinterOne/internal/core/webui"
 )
 
 // Service settings of spec §2.1 step 3.
@@ -524,57 +526,83 @@ func runSession(o RunOptions, session Session, d Deps) {
 		session.Report(Stopped, 2)
 		return
 	}
+	ui, err := config.UIOf(cfg)
+	if err != nil {
+		fmt.Fprintln(log, err)
+		session.Report(Stopped, 2)
+		return
+	}
+	if o.Ready != nil && ui.Port == config.DefaultUIPort {
+		ui.Port = 0
+	}
 	slots := receiver.SlotsMain
 	if o.Edition == "legacy" {
 		slots = receiver.SlotsLegacy
 	}
 	pool := receiver.NewSlotPool(slots)
 	locks := make(map[string]*sync.Mutex)
-	servers := make([]*receiver.Server, 0, len(cfg.Printers))
-	for i, p := range cfg.Printers {
-		p := p
+	var doneMu sync.Mutex
+	dones := []chan struct{}{}
+	manager := &webui.Listeners{Listen: func(p config.Printer, a allow.List) (func(), error) {
 		lock := locks[p.Printer]
 		if lock == nil {
 			lock = &sync.Mutex{}
 			locks[p.Printer] = lock
 		}
 		var allowFn func(net.IP) bool
-		if i < len(cfg.Allow) && cfg.Allow[i] != nil {
-			allowFn = cfg.Allow[i].Allows
+		if a != nil {
+			allowFn = a.Allows
 		}
-		s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(p.Port), Printer: p.Printer, Slots: slots, Pool: pool, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: log, Allow: allowFn, PrintLock: lock,
-			Print: func(name string, data []byte) error { return spool.Print(o.Spool, p.Printer, name, data) }}
-		if err = s.Listen(); err != nil {
-			for _, previous := range servers {
-				previous.CloseListener()
-			}
-			fmt.Fprintln(log, err)
-			session.Report(Stopped, 1)
-			return
+		srv := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(p.Port), Printer: p.Printer, Slots: slots, Pool: pool, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: log, Allow: allowFn, PrintLock: lock, Print: func(name string, data []byte) error { return spool.Print(o.Spool, p.Printer, name, data) }}
+		if e := srv.Listen(); e != nil {
+			return nil, e
 		}
-		servers = append(servers, s)
+		fmt.Fprintf(log, "Listening on %s\nPrinter: %s\n", srv.ListenAddr(), p.Printer)
+		allowValue := a.String()
+		if allowValue == "" {
+			allowValue = "all"
+		}
+		fmt.Fprintf(log, "%s -> %s on %s allow: %s\n", p.Name, p.Printer, srv.ListenAddr(), allowValue)
+		d := make(chan struct{})
+		doneMu.Lock()
+		dones = append(dones, d)
+		doneMu.Unlock()
+		go func() { srv.Serve(); close(d) }()
+		return func() { srv.Shutdown() }, nil
+	}}
+	if err = manager.Apply(cfg); err != nil {
+		manager.Apply(&config.Config{})
+		fmt.Fprintln(log, err)
+		session.Report(Stopped, 1)
+		return
 	}
-	for i, s := range servers {
-		p := cfg.Printers[i]
-		fmt.Fprintf(log, "Listening on %s\nPrinter: %s\n", s.ListenAddr(), p.Printer)
-		fmt.Fprintf(log, "%s -> %s on %s allow: %s\n", p.Name, p.Printer, s.ListenAddr(), allowText(cfg, i))
+	logPath := logfile.Path(logDir)
+	uiDeps := webui.Deps{Config: cfg, ConfigPath: o.ConfigPath, Installed: func() ([]string, error) { return spool.List(o.Spool) }, Stats: func(name string) (int, string) { return webui.LogStats(logPath, name, time.Now()) }, LogPath: logPath, Apply: manager.Apply, UI: ui}
+	uiAddr, stopUI, err := webui.Start(ui, webui.New(uiDeps), nil)
+	if err != nil {
+		manager.Apply(&config.Config{})
+		fmt.Fprintln(log, err)
+		session.Report(Stopped, 1)
+		return
 	}
-	addr := servers[0].ListenAddr()
+	addr := uiAddr
+	if len(cfg.Printers) > 0 {
+		addr = "0.0.0.0:" + strconv.Itoa(cfg.Printers[0].Port)
+	}
 	if o.Ready != nil {
 		o.Ready(addr)
 	}
 	session.Report(Running, 0)
-	done := make([]chan struct{}, len(servers))
-	for i, s := range servers {
-		done[i] = make(chan struct{})
-		go func(s *receiver.Server, d chan struct{}) { s.Serve(); close(d) }(s, done[i])
+	var receiversDone <-chan struct{}
+	if len(dones) > 0 {
+		receiversDone = allDone(dones)
 	}
 	select {
 	case <-session.Controls():
 		session.Report(StopPending, 0)
-		for _, s := range servers {
-			go s.Shutdown()
-		}
+		stopUI()
+		stopped := make(chan struct{})
+		go func() { manager.Apply(&config.Config{}); close(stopped) }()
 		newTicker := d.NewTicker
 		if newTicker == nil {
 			newTicker = func(d time.Duration) (<-chan time.Time, func()) { t := time.NewTicker(d); return t.C, t.Stop }
@@ -584,8 +612,9 @@ func runSession(o RunOptions, session Session, d Deps) {
 		checkpoint := uint32(1)
 		for {
 			select {
-			case <-allDone(done):
-				goto drained
+			case <-stopped:
+				session.Report(Stopped, 0)
+				return
 			case <-ticks:
 				checkpoint++
 				if p, ok := session.(interface{ ReportPending(uint32) }); ok {
@@ -593,9 +622,8 @@ func runSession(o RunOptions, session Session, d Deps) {
 				}
 			}
 		}
-	drained:
-		session.Report(Stopped, 0)
-	case <-allDone(done):
+	case <-receiversDone:
+		stopUI()
 		session.Report(Stopped, 0)
 	}
 }

@@ -9,14 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/xtieume/PrinterOne/internal/core/allow"
 	"github.com/xtieume/PrinterOne/internal/core/buildinfo"
 	"github.com/xtieume/PrinterOne/internal/core/config"
 	"github.com/xtieume/PrinterOne/internal/core/logfile"
 	"github.com/xtieume/PrinterOne/internal/core/receiver"
 	"github.com/xtieume/PrinterOne/internal/core/service"
 	"github.com/xtieume/PrinterOne/internal/core/spool"
+	"github.com/xtieume/PrinterOne/internal/core/webui"
 )
 
 // Env is everything Run takes from the process, so tests can drive it.
@@ -42,19 +46,19 @@ func Run(args []string, env Env) int {
 		env.Stderr = os.Stderr
 	}
 	if len(args) == 0 {
-		return serve(nil, env)
+		return serve(nil, env, true)
 	}
 	switch args[0] {
 	case "serve":
 		var path string
 		if len(args) == 1 {
-			return serve(nil, env)
+			return serve(nil, env, false)
 		}
 		if len(args) != 3 || args[1] != "--config" || args[2] == "" {
 			return usage(env)
 		}
 		path = args[2]
-		return serve(&path, env)
+		return serve(&path, env, false)
 	case "version":
 		if len(args) != 1 {
 			return usage(env)
@@ -214,7 +218,7 @@ func usage(env Env) int {
 	return 2
 }
 
-func serve(path *string, env Env) int {
+func serve(path *string, env Env, openBrowser bool) int {
 	dataDir := config.DataDir(env.Getenv)
 	flag := ""
 	if path != nil {
@@ -222,8 +226,24 @@ func serve(path *string, env Env) int {
 	}
 	cfg, err := config.Load(config.Lookup{Flag: flag, ExeDir: env.ExeDir, DataDir: dataDir})
 	if err != nil {
+		ce, ok := err.(*config.Error)
+		if openBrowser && path == nil && ok && strings.Contains(ce.Msg, "; run printerone printers") {
+			cfg = nil
+		} else {
+			fmt.Fprintln(env.Stderr, err)
+			return 2
+		}
+	}
+	ui, err := config.UIOf(cfg)
+	if err != nil {
 		fmt.Fprintln(env.Stderr, err)
 		return 2
+	}
+	if env.Ready != nil && ui.Port == config.DefaultUIPort {
+		ui.Port = 0
+	}
+	if cfg == nil {
+		cfg = &config.Config{Path: filepath.Join(dataDir, "config.json")}
 	}
 	logDir := cfg.Log.Dir
 	if logDir == "" {
@@ -240,70 +260,63 @@ func serve(path *string, env Env) int {
 	}
 	pool := receiver.NewSlotPool(slots)
 	locks := make(map[string]*sync.Mutex)
-	servers := make([]*receiver.Server, 0, len(cfg.Printers))
-	for i, printer := range cfg.Printers {
-		printer := printer
-		lock := locks[printer.Printer]
+	manager := &webui.Listeners{Listen: func(p config.Printer, a allow.List) (func(), error) {
+		lock := locks[p.Printer]
 		if lock == nil {
 			lock = &sync.Mutex{}
-			locks[printer.Printer] = lock
+			locks[p.Printer] = lock
 		}
 		var allowFn func(net.IP) bool
-		if i < len(cfg.Allow) && cfg.Allow[i] != nil {
-			allowFn = cfg.Allow[i].Allows
+		if a != nil {
+			allowFn = a.Allows
 		}
-		s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(printer.Port), Printer: printer.Printer, Slots: slots, Pool: pool,
-			MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: output, Allow: allowFn, PrintLock: lock,
-			Print: func(name string, data []byte) error { return spool.Print(env.Spool, printer.Printer, name, data) }}
-		if err := s.Listen(); err != nil {
-			for _, previous := range servers {
-				previous.CloseListener()
-			}
-			var busy *receiver.PortBusyError
-			if e, ok := err.(*receiver.PortBusyError); ok {
-				busy = e
-			}
-			if busy != nil {
-				fmt.Fprintln(env.Stderr, busy)
-				return 1
-			}
-			fmt.Fprintln(env.Stderr, err)
-			return 1
+		srv := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(p.Port), Printer: p.Printer, Slots: slots, Pool: pool, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: output, Allow: allowFn, PrintLock: lock, Print: func(name string, data []byte) error { return spool.Print(env.Spool, p.Printer, name, data) }}
+		if e := srv.Listen(); e != nil {
+			return nil, e
 		}
-		servers = append(servers, s)
-	}
-	for i, s := range servers {
-		p := cfg.Printers[i]
-		fmt.Fprintf(output, "Listening on %s\nPrinter: %s\n", s.ListenAddr(), p.Printer)
-		fmt.Fprintf(output, "%s -> %s on %s allow: %s\n", p.Name, p.Printer, s.ListenAddr(), allowText(cfg, i))
-	}
-	if env.Ready != nil && len(servers) > 0 {
-		env.Ready(servers[0].ListenAddr())
-	}
-	dones := make([]chan struct{}, len(servers))
-	for i, s := range servers {
-		dones[i] = make(chan struct{})
-		go func(s *receiver.Server, done chan struct{}) { s.Serve(); close(done) }(s, dones[i])
-	}
-	waitAll := func() {
-		for i, s := range servers {
-			s.Shutdown()
-			<-dones[i]
+		fmt.Fprintf(output, "Listening on %s\nPrinter: %s\n", srv.ListenAddr(), p.Printer)
+		allowValue := a.String()
+		if allowValue == "" {
+			allowValue = "all"
 		}
+		fmt.Fprintf(output, "%s -> %s on %s allow: %s\n", p.Name, p.Printer, srv.ListenAddr(), allowValue)
+		go srv.Serve()
+		stop := func() { srv.Shutdown() }
+		return stop, nil
+	}}
+	// Start UI before listeners so a busy UI port fails without leaving print ports bound.
+	d := webui.Deps{Config: cfg, ConfigPath: cfg.Path, Load: func(p string) (*config.Config, error) { return config.Load(config.Lookup{Flag: p}) }, Installed: func() ([]string, error) { return spool.List(env.Spool) }, Stats: func(name string) (int, string) { return webui.LogStats(absLogPath, name, time.Now()) }, LogPath: absLogPath, Apply: manager.Apply, UI: ui}
+	handler := webui.New(d)
+	uiAddr, stopUI, err := webui.Start(ui, handler, func(u string) error {
+		if openBrowser {
+			return webui.OpenBrowser(u)
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintln(env.Stderr, err)
+		return 1
+	}
+	if err = manager.Apply(cfg); err != nil {
+		manager.Apply(&config.Config{})
+		stopUI()
+		fmt.Fprintln(env.Stderr, err)
+		return 1
+	}
+	if env.Ready != nil {
+		addr := uiAddr
+		if len(cfg.Printers) > 0 {
+			addr = "0.0.0.0:" + strconv.Itoa(cfg.Printers[0].Port)
+		}
+		env.Ready(addr)
 	}
 	if env.Interrupt == nil {
-		for _, done := range dones {
-			<-done
-		}
-		return 0
+		select {}
 	}
-	select {
-	case <-env.Interrupt:
-	case <-dones[0]:
-		return 0
-	}
+	<-env.Interrupt
+	stopUI()
 	stopped := make(chan struct{})
-	go func() { waitAll(); close(stopped) }()
+	go func() { manager.Apply(&config.Config{}); close(stopped) }()
 	select {
 	case <-stopped:
 		return 0
