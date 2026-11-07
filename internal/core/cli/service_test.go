@@ -797,3 +797,22 @@ func TestREQ_SVC_016_NoRulesMatchIsNotFailure(t *testing.T) {
 		t.Fatalf("exit %d; want 0: show exits non-zero, delete is skipped, and add succeeds\n%s", code, r.dump())
 	}
 }
+
+// TC-SVC-050 (break review, 2026-11-07): on XP a failing `netsh firewall show portopening` is a failure reported
+// with netsh's output (spec §2.4), not a silent "no ports open".
+func TestREQ_SVC_016_XPShowFailureReported(t *testing.T) {
+	r := newSvcRig(t)
+	defer r.cleanup()
+	r.env.Service.OSMajor = 5
+	r.scm.exists, r.scm.settings = true, wantSettings(r.config(9102))
+	r.netsh.reply = func(args []string) netshReply {
+		if len(args) > 1 && args[0] == "firewall" && args[1] == "show" {
+			return netshReply{out: "The Windows Firewall service is not running.", err: errExit1}
+		}
+		return defaultNetsh(args)
+	}
+	code := r.run("service", "uninstall")
+	if code != 1 || !strings.Contains(r.stderr.String(), "The Windows Firewall service is not running.") {
+		t.Fatalf("exit %d; want 1 and stderr with the netsh output\n%s", code, r.dump())
+	}
+}

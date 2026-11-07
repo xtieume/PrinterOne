@@ -282,7 +282,7 @@ func Uninstall(d Deps) (warnings []string, err error) {
 func removeXPRules(d Deps, ports []int) error {
 	out, err := runNetsh(d, "firewall", "show", "portopening")
 	if err != nil {
-		return nil
+		return err // spec §2.4: a failing XP `show` is a failure reported with netsh's output
 	}
 	for _, p := range ports {
 		if portListed(string(out), p) {

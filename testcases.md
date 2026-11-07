@@ -452,3 +452,4 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-UI-101 | REQ-UI-012 | `TestREQ_UI_012_FirstSaveNeedsNoRestart` | review finding, 2026-11-07 |
 | TC-UI-102 | REQ-UI-009 | `TestREQ_UI_009_PortSwapInOneSave` | review finding, 2026-11-07 |
 | TC-UI-103 | REQ-UI-009 | `TestREQ_UI_009_ServiceKeepsRunningWhenUIReplacesListeners` | review finding, 2026-11-07 |
+| TC-SVC-050 | REQ-SVC-016 | `TestREQ_SVC_016_XPShowFailureReported` | Break review: a failing XP `netsh firewall show portopening` was silently treated as no ports open; spec §2.4 makes it a reported failure (2026-11-07) |
