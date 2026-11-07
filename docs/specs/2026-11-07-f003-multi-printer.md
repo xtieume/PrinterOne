@@ -15,7 +15,8 @@ them; out of scope), per-printer allowlist (F-004).
 | # | Question | Answer |
 |---|---|---|
 | Q1 | Routing | One port per printer (issue #6 question 3, PR #5) — decided by Claude on the owner's delegation (2026-11-07). |
-| Q2 | Limits with several printers | Decided by Claude (2026-11-07): the 8 / 2 receive slots and the 256 MB limit are shared by the whole process, so memory stays bounded however many printers there are. |
+| Q2 | Limits with several printers | Decided by Claude (2026-11-07): the 8 / 2 receive slots are shared by the whole process and the 256 MB limit is per job, so memory stays bounded at slots × 256 MB however many printers there are. |
+| Q3 | Details from test design | Decided by Claude (2026-11-07): "one printer" for serialising means one Windows printer name (two entries sharing a printer print one after another); a missing name becomes `printer<i+1>` like an empty one; with several invalid entries the first by index is reported; field errors come before duplicate errors; start-up lines use `->`. |
 
 ## 2. Behaviour
 
@@ -28,9 +29,10 @@ them; out of scope), per-printer allowlist (F-004).
   (F-001 §2.2).
 - Each port prints to its own entry's printer. Jobs for the same printer are written one after another; jobs for
   different printers may print at the same time.
-- Receive slots (8 main, 2 legacy) and the 256 MB limit are shared by all ports.
+- Receive slots (8 main, 2 legacy) are shared by all ports; the 256 MB limit applies to each job on every port, so at
+  most `slots × 256 MB` of jobs are in memory however many printers there are.
 - Log lines name the printer of the port the job came in on (F-001 §2.5 already carries `"<printer>"`); start-up
-  lines list every `name → printer on 0.0.0.0:<port>`.
+  lines list every `name -> printer on 0.0.0.0:<port>` (ASCII arrow: the XP console has no `→`).
 - Ctrl+C / service stop apply to every port at once.
 - F-008: `service install` opens every configured port in the firewall rule (one rule, port list on Vista+; one
   port opening per port on XP); uninstall closes them all.
@@ -41,7 +43,7 @@ Choosing the printer from the job data or the client, load balancing, printer gr
 
 ## Requirements
 
-- **REQ-MULTI-001** A config with 2–32 valid printers loads; 0 or 33 printers exits 2 naming `printers`.
+- **REQ-MULTI-001** A config with 1–32 valid printers loads; 0 or 33 printers exits 2 naming `printers`.
 - **REQ-MULTI-002** An invalid field of any entry exits 2 naming it with its index (`printers[2].port`).
 - **REQ-MULTI-003** Two entries with the same port exit 2 naming the second entry's `printers[i].port`.
 - **REQ-MULTI-004** Two entries with the same name exit 2 naming the second `printers[i].name`; with several
@@ -50,7 +52,8 @@ Choosing the printer from the job data or the client, load balancing, printer gr
 - **REQ-MULTI-006** Jobs for two different printers can be printed at the same time; jobs for one printer are
   written one after another.
 - **REQ-MULTI-007** If one configured port is busy, nothing listens and the program exits 1 naming that port.
-- **REQ-MULTI-008** The receive slots and the 256 MB limit are shared by all ports.
+- **REQ-MULTI-008** The receive slots are shared by all ports and the 256 MB limit applies to each job on every
+  port.
 - **REQ-MULTI-009** Start-up lines list every printer with its name and port; connection lines name the printer of
   the port used.
 - **REQ-MULTI-010** Ctrl+C and service stop stop every port, with F-001 shutdown rules on each.

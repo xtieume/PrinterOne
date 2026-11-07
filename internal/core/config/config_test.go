@@ -280,7 +280,7 @@ func TestREQ_CFG_005_InvalidFieldNamesField(t *testing.T) {
 		{"TC-CFG-022", `{"version":2}`, "printers"},
 		{"TC-CFG-023", `{"version":2,"printers":{"printer":"P"}}`, "printers"},
 		{"TC-CFG-024", `{"version":2,"printers":[]}`, "printers"},
-		{"TC-CFG-025", wrap(`{"printer":"P","port":9100},{"printer":"Q","port":9101}`), "printers"},
+		// TC-CFG-025 (two printers) moved to F-003: several printers are valid there (TC-MULTI-*).
 		{"TC-CFG-026", wrap(`"Canon"`), "printers[0]"},
 		{"TC-CFG-040", wrap(`null`), "printers[0]"},
 		{"TC-CFG-027", wrap(`{"port":9100}`), "printers[0].printer"},

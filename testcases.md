@@ -29,7 +29,7 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-CFG-022 | REQ-CFG-005 | `TestREQ_CFG_005_InvalidFieldNamesField/TC-CFG-022` | `printers` missing; catches: nil slice indexed → panic |
 | TC-CFG-023 | REQ-CFG-005 | `TestREQ_CFG_005_InvalidFieldNamesField/TC-CFG-023` | `printers` not a list; catches: decode error reported without the field name |
 | TC-CFG-024 | REQ-CFG-005 | `TestREQ_CFG_005_InvalidFieldNamesField/TC-CFG-024` | `printers` empty; catches: `len > 1` checked but not `len == 0` |
-| TC-CFG-025 | REQ-CFG-005 | `TestREQ_CFG_005_InvalidFieldNamesField/TC-CFG-025` | Two printers (F-001 accepts exactly one); catches: extra entries silently ignored |
+| TC-CFG-025 | REQ-CFG-005 | — (superseded) | Two printers was an error in F-001; F-003 makes several printers valid, so the case moved to TC-MULTI-* (2026-11-07) |
 | TC-CFG-026 | REQ-CFG-005 | `TestREQ_CFG_005_InvalidFieldNamesField/TC-CFG-026` | Entry not an object; catches: decode error without field |
 | TC-CFG-027 | REQ-CFG-005 | `TestREQ_CFG_005_InvalidFieldNamesField/TC-CFG-027` | `printer` missing; catches: empty printer accepted, every job fails later |
 | TC-CFG-028 | REQ-CFG-005 | `TestREQ_CFG_005_InvalidFieldNamesField/TC-CFG-028` | `printer` empty string; catches: only the missing key checked |
@@ -247,3 +247,55 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-SVC-047 | REQ-SVC-015 | `TestREQ_SVC_015_XPRemovalMatchesPortNumber` | review finding, 2026-11-07 |
 | TC-SVC-048 | REQ-SVC-014 | `TestREQ_SVC_014_RemovalSkipsDeleteWhenShowFails` | review finding, 2026-11-07 |
 | TC-SVC-049 | REQ-SVC-007 | `TestREQ_SVC_007_RollbackStopsCreatedServiceBeforeDelete` | review finding, 2026-11-07 |
+| TC-LOGF-056 | REQ-LOGF-007 | `TestREQ_LOGF_007_BackwardClockNeverMovesOrOverwritesDays` | review finding, 2026-11-07 |
+| TC-LOGF-057 | REQ-LOGF-007 | `TestREQ_LOGF_007_ExistingRotationTargetIsAppended` | review finding, 2026-11-07 |
+| TC-LOGF-058 | REQ-LOGF-007 | `TestREQ_LOGF_007_FailedRotationRetriedOnLaterWrite` | review finding, 2026-11-07 |
+| TC-LOGF-059 | REQ-LOGF-007 | `TestREQ_LOGF_007_TwoIndependentWritersCoordinateRotation` | review finding, 2026-11-07 |
+| TC-LOGF-060 | REQ-LOGF-004 | `TestREQ_LOGF_004_FileGetsLineWhenStdoutFails` | review finding, 2026-11-07 |
+| TC-MULTI-001 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-001` | Two printers load in order |
+| TC-MULTI-002 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-002` | 32 printers load |
+| TC-MULTI-003 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-003` | 33 printers exit 2 naming `printers` |
+| TC-MULTI-004 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-004` | 0 printers exit 2 naming `printers` |
+| TC-MULTI-005 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-005` | One printer still loads with name `default` |
+| TC-MULTI-006 | REQ-MULTI-002 | `TestREQ_MULTI_002_InvalidEntryNamesIndex/TC-MULTI-006` | Invalid port in entry 2 names its index |
+| TC-MULTI-007 | REQ-MULTI-002 | `TestREQ_MULTI_002_InvalidEntryNamesIndex/TC-MULTI-007` | Entry 1 not an object |
+| TC-MULTI-008 | REQ-MULTI-002 | `TestREQ_MULTI_002_InvalidEntryNamesIndex/TC-MULTI-008` | Entry 1 `printer` missing / empty / not a string |
+| TC-MULTI-009 | REQ-MULTI-002 | `TestREQ_MULTI_002_InvalidEntryNamesIndex/TC-MULTI-009` | Entry 1 `port` wrong type / fraction / 0 |
+| TC-MULTI-010 | REQ-MULTI-002 | `TestREQ_MULTI_002_InvalidEntryNamesIndex/TC-MULTI-010` | Two invalid entries: the first by index is named |
+| TC-MULTI-011 | REQ-MULTI-002 | `TestREQ_MULTI_002_ServeInvalidEntryExits2` | `serve` with an invalid entry exits 2, one stderr line, nothing listens |
+| TC-MULTI-012 | REQ-MULTI-003 | `TestREQ_MULTI_003_DuplicatePortNamesSecond/TC-MULTI-012` | Duplicate port names the second entry |
+| TC-MULTI-013 | REQ-MULTI-003 | `TestREQ_MULTI_003_DuplicatePortNamesSecond/TC-MULTI-013` | Default port collides with explicit 9100 |
+| TC-MULTI-014 | REQ-MULTI-003 | `TestREQ_MULTI_003_DuplicatePortNamesSecond/TC-MULTI-014` | Field error reported before a duplicate |
+| TC-MULTI-015 | REQ-MULTI-004 | `TestREQ_MULTI_004_Names/TC-MULTI-015` | Duplicate name names the second entry |
+| TC-MULTI-016 | REQ-MULTI-004 | `TestREQ_MULTI_004_Names/TC-MULTI-016` | Empty names become `printer<i+1>` |
+| TC-MULTI-017 | REQ-MULTI-004 | `TestREQ_MULTI_004_Names/TC-MULTI-017` | Missing names become `printer<i+1>` |
+| TC-MULTI-018 | REQ-MULTI-004 | `TestREQ_MULTI_004_Names/TC-MULTI-018` | Generated name collides with an explicit one |
+| TC-MULTI-019 | REQ-MULTI-004 | `TestREQ_MULTI_004_Names/TC-MULTI-019` | Explicit `default` beside a generated name is not a duplicate |
+| TC-MULTI-020 | REQ-MULTI-004 | `TestREQ_MULTI_004_Names/TC-MULTI-020` | Same Windows printer on two ports loads |
+| TC-MULTI-021 | REQ-MULTI-005 | `TestREQ_MULTI_005_EachPortPrintsOnItsPrinter` | Each port prints on its own printer |
+| TC-MULTI-022 | REQ-MULTI-006 | `TestREQ_MULTI_006_DifferentPrintersPrintAtOnce` | Different printers print at the same time |
+| TC-MULTI-023 | REQ-MULTI-006 | `TestREQ_MULTI_006_SameWindowsPrinterOneAfterAnother` | One Windows printer on two ports is written one job after another |
+| TC-MULTI-024 | REQ-MULTI-007 | `TestREQ_MULTI_007_SecondPortBusyNothingListens` | Second port busy: exit 1 naming it, first port released |
+| TC-MULTI-025 | REQ-MULTI-007 | `TestREQ_MULTI_007_FirstPortBusyNamesIt` | First port busy: message names the busy port, not the other |
+| TC-MULTI-026 | REQ-MULTI-007 | `TestREQ_MULTI_007_ServiceBusySecondPortStopsWithCode1` | Under the SCM a busy second port stops with code 1 |
+| TC-MULTI-027 | REQ-MULTI-008 | `TestREQ_MULTI_008_SlotPoolSharedByServers` | Receive slots shared by two Servers |
+| TC-MULTI-028 | REQ-MULTI-008 | `TestREQ_MULTI_008_LegacySlotsSharedAcrossPorts` | Legacy edition: 2 slots across three ports |
+| TC-MULTI-029 | REQ-MULTI-008 | `TestREQ_MULTI_008_JobLimitOnSecondPort` | 256 MB limit applies on the second port |
+| TC-MULTI-030 | REQ-MULTI-009 | `TestREQ_MULTI_009_StartUpLinesListEveryPrinter` | Start-up lines list every printer |
+| TC-MULTI-031 | REQ-MULTI-009 | `TestREQ_MULTI_009_ConnectionLineNamesPortPrinter` | Connection line names the printer of the port used |
+| TC-MULTI-032 | REQ-MULTI-009 | `TestREQ_MULTI_009_ServiceLogListsEveryPrinter` | `service run` log lists every printer |
+| TC-MULTI-033 | REQ-MULTI-010 | `TestREQ_MULTI_010_CtrlCDropsReceivingOnEveryPort` | Ctrl+C drops receiving connections on every port |
+| TC-MULTI-034 | REQ-MULTI-010 | `TestREQ_MULTI_010_CtrlCPrintsReceivedJobOnSecondPort` | A received job on the second port is printed at Ctrl+C |
+| TC-MULTI-035 | REQ-MULTI-010 | `TestREQ_MULTI_010_ServiceStopClosesEveryPort` | Service stop closes every port |
+| TC-MULTI-036 | REQ-MULTI-011 | `TestREQ_MULTI_011_VistaInstallOneRuleEveryPort` | Vista install: one rule with every port |
+| TC-MULTI-037 | REQ-MULTI-011 | `TestREQ_MULTI_011_XPInstallOpensEveryPort` | XP install opens one port opening per port |
+| TC-MULTI-038 | REQ-MULTI-011 | `TestREQ_MULTI_011_XPUninstallClosesEveryPort` | XP uninstall closes every configured port |
+| TC-MULTI-039 | REQ-MULTI-011 | `TestREQ_MULTI_011_XPInstallClosesEveryOldPortFirst` | XP install closes every old port before opening new ones |
+| TC-MULTI-040 | REQ-MULTI-011 | `TestREQ_MULTI_011_XPRollbackClosesEveryPort` | XP install rollback closes every port it opened |
+| TC-MULTI-041 | REQ-MULTI-011 | `TestREQ_MULTI_011_VistaUninstallRemovesRule` | Vista uninstall removes the rule for every port |
+| TC-MULTI-042 | REQ-MULTI-012 | `scripts/harness check core-go110` | Go 1.10.8 build and tests |
+| TC-MULTI-043 | REQ-MULTI-011 | `TestREQ_MULTI_011_XPAddFailureClosesOpenedPorts` | XP install: `add portopening` fails on the second port, the first is closed again |
+| TC-MULTI-044 | REQ-MULTI-008 | `TestREQ_MULTI_008_MainSlotsSharedAcrossPorts` | Main edition: 8 slots across two ports |
+| TC-MULTI-045 | REQ-MULTI-002 | `TestREQ_MULTI_002_ServiceInstallInvalidEntryChangesNothing` | `service install` with an invalid entry changes nothing |
+| TC-MULTI-046 | REQ-MULTI-008 | `TestREQ_MULTI_008_JobLimitIsPerJobNotPerProcess` | 256 MB is per job, not a process budget (Claude decision) |
+| TC-MULTI-047 | REQ-MULTI-009 | `TestREQ_MULTI_009_SinglePrinterStartUpLine` | One printer: one start-up line in the new shape |

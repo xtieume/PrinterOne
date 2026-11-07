@@ -32,6 +32,7 @@ type Server struct {
 	MaxBytes int64
 	Idle     time.Duration
 	Slots    int
+	Pool     *SlotPool // shared receive slots (F-003); nil: Slots of its own
 	Log      io.Writer
 	Now      func() time.Time
 
@@ -44,6 +45,16 @@ type Server struct {
 	shutdownOnce sync.Once
 	logs         sync.Mutex
 }
+
+// SlotPool is a set of receive slots shared by every Server of one process (spec
+// docs/specs/2026-11-07-f003-multi-printer.md §2: 8 main / 2 legacy for all ports together). A Server whose Pool
+// is set takes its slots from it and ignores Slots.
+type SlotPool struct {
+	n int
+}
+
+// NewSlotPool returns a pool of n receive slots.
+func NewSlotPool(n int) *SlotPool { return &SlotPool{n: n} }
 
 type PortBusyError struct{ Port int }
 
