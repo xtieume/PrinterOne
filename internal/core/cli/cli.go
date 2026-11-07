@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/xtieume/PrinterOne/internal/core/buildinfo"
@@ -70,13 +71,115 @@ func Run(args []string, env Env) int {
 			fmt.Fprintln(env.Stdout, name)
 		}
 		return 0
+	case "service":
+		return serviceCommand(args[1:], env)
 	default:
 		return usage(env)
 	}
 }
 
+func serviceCommand(args []string, env Env) int {
+	if len(args) == 0 {
+		return usage(env)
+	}
+	switch args[0] {
+	case "install":
+		var path string
+		if len(args) == 1 {
+			path = ""
+		} else if len(args) == 3 && args[1] == "--config" && args[2] != "" {
+			path = args[2]
+		} else {
+			return usage(env)
+		}
+		if err := service.RequireAdmin(env.Service); err != nil {
+			return reportServiceError(err, env)
+		}
+		dataDir := config.DataDir(env.Getenv)
+		cfg, err := config.Load(config.Lookup{Flag: path, ExeDir: env.ExeDir, DataDir: dataDir})
+		if err != nil {
+			fmt.Fprintln(env.Stderr, err)
+			return 2
+		}
+		exe := env.ExePath
+		if exe == "" {
+			exe, err = os.Executable()
+			if err != nil {
+				fmt.Fprintln(env.Stderr, err)
+				return 1
+			}
+		}
+		if !isWindowsAbsolute(exe) {
+			exe, err = filepath.Abs(exe)
+			if err != nil {
+				fmt.Fprintln(env.Stderr, err)
+				return 1
+			}
+		}
+		cfgPath, err := filepath.Abs(cfg.Path)
+		if err != nil {
+			fmt.Fprintln(env.Stderr, err)
+			return 1
+		}
+		ports := make([]int, 0, len(cfg.Printers))
+		for _, p := range cfg.Printers {
+			ports = append(ports, p.Port)
+		}
+		if err = service.Install(service.InstallOptions{ExePath: exe, ConfigPath: cfgPath, Ports: ports}, env.Service); err != nil {
+			return reportServiceError(err, env)
+		}
+		fmt.Fprintln(env.Stdout, "service PrinterOne installed and running")
+		return 0
+	case "uninstall":
+		if len(args) != 1 {
+			return usage(env)
+		}
+		if err := service.RequireAdmin(env.Service); err != nil {
+			return reportServiceError(err, env)
+		}
+		warnings, err := service.Uninstall(env.Service)
+		for _, w := range warnings {
+			fmt.Fprintln(env.Stderr, w)
+		}
+		if err != nil {
+			return reportServiceError(err, env)
+		}
+		fmt.Fprintln(env.Stdout, "service PrinterOne removed")
+		return 0
+	case "run":
+		if len(args) != 3 || args[1] != "--config" || args[2] == "" {
+			return usage(env)
+		}
+		path, err := filepath.Abs(args[2])
+		if err != nil {
+			fmt.Fprintln(env.Stderr, err)
+			return 1
+		}
+		err = service.Run(service.RunOptions{ConfigPath: path, Edition: env.Edition, DataDir: config.DataDir(env.Getenv), Spool: env.Spool, Ready: env.Ready}, env.Service)
+		if err != nil {
+			return reportServiceError(err, env)
+		}
+		return 0
+	default:
+		return usage(env)
+	}
+}
+
+func isWindowsAbsolute(path string) bool {
+	return len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
+}
+
+func reportServiceError(err error, env Env) int {
+	if e, ok := err.(*service.Error); ok {
+		fmt.Fprintln(env.Stderr, e.Msg)
+		return e.Code
+	}
+	fmt.Fprintln(env.Stderr, err)
+	return 1
+}
+
 func usage(env Env) int {
-	fmt.Fprintln(env.Stderr, "usage: printerone [serve [--config path] | printers | version]")
+	fmt.Fprintln(env.Stderr, "usage: printerone [serve [--config path] | printers | version | service install [--config path] | service uninstall | service run --config path]")
 	return 2
 }
 

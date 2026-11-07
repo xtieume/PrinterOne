@@ -6,9 +6,17 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/xtieume/PrinterOne/internal/core/config"
+	"github.com/xtieume/PrinterOne/internal/core/receiver"
 	"github.com/xtieume/PrinterOne/internal/core/spool"
 )
 
@@ -119,22 +127,372 @@ type RunOptions struct {
 }
 
 // RequireAdmin returns an exit-1 *Error printing `run as administrator` when the process is not elevated.
-func RequireAdmin(d Deps) error { return nil }
+func RequireAdmin(d Deps) error {
+	if d.SCM == nil || !d.SCM.IsAdmin() {
+		return &Error{Code: 1, Msg: "run as administrator"}
+	}
+	return nil
+}
 
 // Install creates or updates the service, replaces the firewall rule and starts the service (§2.1 steps 3–5),
 // undoing this run's changes when the rule or the start fails.
-func Install(o InstallOptions, d Deps) error { return nil }
+func Install(o InstallOptions, d Deps) error {
+	if err := RequireAdmin(d); err != nil {
+		return err
+	}
+	if d.SCM == nil {
+		return &Error{Code: 1, Msg: "service control manager is unavailable"}
+	}
+	var err error
+	exe := o.ExePath
+	if !isWindowsAbsolute(exe) {
+		exe, err = filepath.Abs(exe)
+		if err != nil {
+			return serviceError(err)
+		}
+	}
+	cfg, err := filepath.Abs(o.ConfigPath)
+	if err != nil {
+		return serviceError(err)
+	}
+	settings := Settings{DisplayName: DisplayName, Description: Description,
+		BinaryPath: `"` + exe + `" service run --config "` + cfg + `"`, StartType: StartAuto, Account: Account}
+	exists, err := d.SCM.Exists(Name)
+	if err != nil {
+		return serviceError(err)
+	}
+	created := false
+	var old Settings
+	if exists {
+		old, err = d.SCM.Config(Name)
+		if err != nil {
+			return serviceError(err)
+		}
+		if err = d.SCM.Update(Name, settings); err != nil {
+			return serviceError(err)
+		}
+	} else {
+		if err = d.SCM.Create(Name, settings); err != nil {
+			return serviceError(err)
+		}
+		created = true
+	}
+
+	if d.OSMajor == 5 && exists {
+		oldPath := serviceConfigPath(old.BinaryPath)
+		if oldPath != "" {
+			if oldCfg, loadErr := config.Load(config.Lookup{Flag: oldPath}); loadErr == nil {
+				for _, p := range oldCfg.Printers {
+					if _, e := runNetsh(d, "firewall", "delete", "portopening", "protocol=TCP", "port="+strconv.Itoa(p.Port)); e != nil && !noRulesMatch(e, nil) {
+						return rollbackInstall(d, created, nil, serviceError(e))
+					}
+				}
+			}
+		}
+	}
+	if d.OSMajor == 5 {
+		for _, port := range o.Ports {
+			if _, err = runNetsh(d, "firewall", "add", "portopening", "protocol=TCP", "port="+strconv.Itoa(port), "name="+RuleName); err != nil {
+				return rollbackInstall(d, created, func() { removeFirewall(d, o.Ports) }, serviceError(err))
+			}
+		}
+	} else {
+		if _, err = runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName); err != nil && !noRulesMatch(err, nil) {
+			return rollbackInstall(d, created, nil, serviceError(err))
+		}
+		ports := make([]string, 0, len(o.Ports))
+		for _, p := range o.Ports {
+			ports = append(ports, strconv.Itoa(p))
+		}
+		if _, err = runNetsh(d, "advfirewall", "firewall", "add", "rule", "name="+RuleName, "dir=in", "action=allow", "protocol=TCP", "localport="+strings.Join(ports, ",")); err != nil {
+			return rollbackInstall(d, created, func() { removeFirewall(d, o.Ports) }, serviceError(err))
+		}
+	}
+	if err = startAndWait(d); err != nil {
+		return rollbackInstall(d, created, func() { removeFirewall(d, o.Ports) }, serviceError(err))
+	}
+	return nil
+}
 
 // Uninstall stops and deletes the service and removes the firewall rule (§2.2). Warnings (XP: ports that could
 // not be closed) are returned for stderr; they do not fail the command.
-func Uninstall(d Deps) (warnings []string, err error) { return nil, nil }
+func Uninstall(d Deps) (warnings []string, err error) {
+	if err = RequireAdmin(d); err != nil {
+		return nil, err
+	}
+	exists, err := d.SCM.Exists(Name)
+	if err != nil {
+		return nil, serviceError(err)
+	}
+	var old Settings
+	var ports []int
+	if exists {
+		old, err = d.SCM.Config(Name)
+		if err != nil {
+			return nil, serviceError(err)
+		}
+		if d.OSMajor == 5 {
+			path := serviceConfigPath(old.BinaryPath)
+			cfg, loadErr := config.Load(config.Lookup{Flag: path})
+			if loadErr != nil {
+				warnings = append(warnings, fmt.Sprintf("could not read service config %s; XP firewall ports cannot be known", path))
+			} else {
+				for _, p := range cfg.Printers {
+					ports = append(ports, p.Port)
+				}
+			}
+		}
+		state, e := d.SCM.State(Name)
+		if e != nil {
+			return warnings, serviceError(e)
+		}
+		if state != Stopped {
+			if e = d.SCM.Stop(Name); e != nil {
+				return warnings, serviceError(e)
+			}
+			if e = waitForState(d, Stopped, WaitTimeout); e != nil {
+				return warnings, serviceError(e)
+			}
+		}
+		if err = d.SCM.Delete(Name); err != nil {
+			return warnings, serviceError(err)
+		}
+	}
+	if d.OSMajor == 5 {
+		for _, p := range ports {
+			if _, e := runNetsh(d, "firewall", "delete", "portopening", "protocol=TCP", "port="+strconv.Itoa(p)); e != nil && !noRulesMatch(e, nil) {
+				return warnings, serviceError(e)
+			}
+		}
+	} else if _, e := runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName); e != nil && !noRulesMatch(e, nil) {
+		return warnings, serviceError(e)
+	}
+	return warnings, nil
+}
 
 // Run hands the process to the SCM and serves the configured printer until a stop or shutdown request (§2.3).
 // It returns an exit-2 *Error when the process was started from a console.
-func Run(o RunOptions, d Deps) error { return nil }
+func Run(o RunOptions, d Deps) error {
+	if d.Dispatch == nil {
+		return &Error{Code: 2, Msg: "service run is started by Windows; use serve to run in a console"}
+	}
+	err := d.Dispatch(Name, func(session Session) { runSession(o, session) })
+	if err == ErrNotService {
+		return &Error{Code: 2, Msg: "service run is started by Windows; use serve to run in a console"}
+	}
+	return err
+}
 
 // LogPath is <data dir>\logs\printerone.log.
-func LogPath(dataDir string) string { return "" }
+func LogPath(dataDir string) string { return filepath.Join(dataDir, "logs", "printerone.log") }
 
 // Netsh runs a program and returns its combined output; the production Runner.
-func Netsh(name string, args ...string) ([]byte, error) { return nil, nil }
+func Netsh(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+func serviceError(err error) *Error {
+	if e, ok := err.(*Error); ok {
+		return e
+	}
+	return &Error{Code: 1, Msg: err.Error()}
+}
+
+func runNetsh(d Deps, args ...string) ([]byte, error) {
+	runner := d.Netsh
+	if runner == nil {
+		runner = Netsh
+	}
+	out, err := runner("netsh", args...)
+	if err != nil {
+		if noRulesMatch(err, out) {
+			return out, nil
+		}
+		if strings.TrimSpace(string(out)) != "" {
+			return out, errors.New(strings.TrimSpace(string(out)))
+		}
+	}
+	return out, err
+}
+
+func noRulesMatch(err error, out []byte) bool {
+	s := strings.ToLower(string(out) + " " + err.Error())
+	return strings.Contains(s, "no rules match")
+}
+
+func removeFirewall(d Deps, ports []int) {
+	if d.OSMajor == 5 {
+		for _, p := range ports {
+			runNetsh(d, "firewall", "delete", "portopening", "protocol=TCP", "port="+strconv.Itoa(p))
+		}
+	} else {
+		runNetsh(d, "advfirewall", "firewall", "delete", "rule", "name="+RuleName)
+	}
+}
+
+func rollbackInstall(d Deps, created bool, cleanup func(), cause error) error {
+	if cleanup != nil {
+		cleanup()
+	}
+	if created {
+		d.SCM.Delete(Name)
+	}
+	return cause
+}
+
+func sleep(d Deps, duration time.Duration) {
+	if d.Sleep != nil {
+		d.Sleep(duration)
+	} else {
+		time.Sleep(duration)
+	}
+}
+
+func startAndWait(d Deps) error {
+	state, err := d.SCM.State(Name)
+	if err != nil {
+		return err
+	}
+	if state == Running {
+		if err = d.SCM.Stop(Name); err != nil {
+			return err
+		}
+		if err = waitForState(d, Stopped, WaitTimeout); err != nil {
+			return err
+		}
+	}
+	if err = d.SCM.Start(Name); err != nil {
+		return err
+	}
+	return waitForState(d, Running, WaitTimeout)
+}
+
+func waitForState(d Deps, want State, timeout time.Duration) error {
+	start := time.Now()
+	if d.Now != nil {
+		start = d.Now()
+	}
+	for {
+		state, err := d.SCM.State(Name)
+		if err != nil {
+			return err
+		}
+		if state == want {
+			return nil
+		}
+		now := time.Now()
+		if d.Now != nil {
+			now = d.Now()
+		}
+		if now.Sub(start) >= timeout {
+			return &Error{Code: 1, Msg: fmt.Sprintf("timed out waiting for service %s", stateLabel(want))}
+		}
+		sleep(d, time.Second)
+	}
+}
+
+func stateLabel(s State) string {
+	if s == Running {
+		return "running"
+	}
+	return "stopped"
+}
+
+func serviceConfigPath(line string) string {
+	marker := "service run --config \""
+	i := strings.Index(line, marker)
+	if i < 0 {
+		return ""
+	}
+	value := line[i+len(marker):]
+	if end := strings.Index(value, "\""); end >= 0 {
+		return value[:end]
+	}
+	return ""
+}
+
+func isWindowsAbsolute(path string) bool {
+	return len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
+}
+
+type logWriter struct{ w io.Writer }
+
+func (l *logWriter) Write(p []byte) (int, error) {
+	if l == nil || l.w == nil {
+		return len(p), nil
+	}
+	n, err := l.w.Write(p)
+	if err != nil {
+		return len(p), nil
+	}
+	return n, nil
+}
+
+func openLog(o RunOptions) (io.Writer, func()) {
+	path := LogPath(o.DataDir)
+	if o.OpenLog != nil {
+		w, err := o.OpenLog(path)
+		if err != nil {
+			return &logWriter{}, func() {}
+		}
+		return &logWriter{w}, func() {
+			if c, ok := w.(io.Closer); ok {
+				c.Close()
+			}
+		}
+	}
+	if os.MkdirAll(filepath.Dir(path), 0755) != nil {
+		return &logWriter{}, func() {}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return &logWriter{}, func() {}
+	}
+	return &logWriter{f}, func() { f.Close() }
+}
+
+func runSession(o RunOptions, session Session) {
+	log, closeLog := openLog(o)
+	defer closeLog()
+	session.Report(StartPending, 0)
+	cfg, err := config.Load(config.Lookup{Flag: o.ConfigPath})
+	if err != nil {
+		fmt.Fprintln(log, err)
+		session.Report(Stopped, 2)
+		return
+	}
+	p := cfg.Printers[0]
+	slots := receiver.SlotsMain
+	if o.Edition == "legacy" {
+		slots = receiver.SlotsLegacy
+	}
+	s := &receiver.Server{Addr: "0.0.0.0:" + strconv.Itoa(p.Port), Printer: p.Printer, Slots: slots, MaxBytes: receiver.MaxJobBytes, Idle: receiver.IdleTimeout, Log: log,
+		Print: func(name string, data []byte) error { return spool.Print(o.Spool, p.Printer, name, data) }}
+	if err = s.Listen(); err != nil {
+		fmt.Fprintln(log, err)
+		session.Report(Stopped, 1)
+		return
+	}
+	addr := s.ListenAddr()
+	fmt.Fprintf(log, "Listening on %s\nPrinter: %s\n", addr, p.Printer)
+	if o.Ready != nil {
+		o.Ready(addr)
+	}
+	session.Report(Running, 0)
+	done := make(chan error, 1)
+	go func() { done <- s.Serve() }()
+	select {
+	case <-session.Controls():
+		session.Report(StopPending, 0)
+		s.Shutdown()
+		<-done
+		session.Report(Stopped, 0)
+	case err := <-done:
+		if err != nil {
+			fmt.Fprintln(log, err)
+			session.Report(Stopped, 1)
+		} else {
+			session.Report(Stopped, 0)
+		}
+	}
+}
