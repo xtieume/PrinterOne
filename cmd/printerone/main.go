@@ -3,17 +3,19 @@
 package main
 
 import (
-	"fmt"
 	"os"
+	"os/signal"
+	"path/filepath"
 
-	"github.com/xtieume/PrinterOne/internal/core/buildinfo"
+	"github.com/xtieume/PrinterOne/internal/core/cli"
+	"github.com/xtieume/PrinterOne/internal/core/spool"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println(buildinfo.String("main"))
-		return
-	}
-	fmt.Fprintln(os.Stderr, "usage: printerone version")
-	os.Exit(2)
+	exe, _ := os.Executable()
+	sig := make(chan os.Signal, 2)
+	signal.Notify(sig, os.Interrupt)
+	env := cli.Env{Edition: "main", ExeDir: filepath.Dir(exe), Getenv: os.Getenv,
+		Spool: spool.System(), Stdout: os.Stdout, Stderr: os.Stderr, Interrupt: sig}
+	os.Exit(cli.Run(os.Args[1:], env))
 }
