@@ -141,6 +141,8 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-LOG-020 | REQ-LOG-001 | `TestREQ_LOG_001_FullLineForEmptyResetShutdown` | Ledger audit: the LOG-001 row never matched the full line for `empty`, `dropped: reset`, `dropped: shutdown` |
 | TC-RECV-028 | REQ-RECV-010 | `TestREQ_RECV_010_AcceptErrorRetriesAndPrintsNextJob` | review finding P1-1, 2026-11-07 |
 | TC-RECV-029 | REQ-RECV-007 | `TestREQ_RECV_007_ClientWaitsInBacklogUntilSlotFrees` | review finding P1-2, 2026-11-07 |
+| TC-RECV-030 | REQ-RECV-007 | `TestREQ_RECV_007_PoolServerWaitsInBacklogUntilSlotFrees` | review finding, 2026-11-07 |
+| TC-LOG-021 | REQ-LOG-001 | `TestREQ_LOG_001_ConnectionWaitingForSlotLoggedOnShutdown` | review finding, 2026-11-07 |
 | TC-CFG-045 | REQ-CFG-003 | `TestREQ_CFG_003_LeadingUTF8BOMIgnored` | review finding P2-2, 2026-11-07 |
 | TC-CFG-046 | REQ-CFG-005 | `TestREQ_CFG_005_TopLevelMustBeObject` | review finding P3-4, 2026-11-07 |
 | TC-SVC-001 | REQ-SVC-001 | `TestREQ_SVC_001_InstallWithoutAdminChangesNothing` | Install without admin changes nothing; catches: admin check missing or done after mutating the SCM |
@@ -299,6 +301,9 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-MULTI-045 | REQ-MULTI-002 | `TestREQ_MULTI_002_ServiceInstallInvalidEntryChangesNothing` | `service install` with an invalid entry changes nothing |
 | TC-MULTI-046 | REQ-MULTI-008 | `TestREQ_MULTI_008_JobLimitIsPerJobNotPerProcess` | 256 MB is per job, not a process budget (Claude decision) |
 | TC-MULTI-047 | REQ-MULTI-009 | `TestREQ_MULTI_009_SinglePrinterStartUpLine` | One printer: one start-up line in the new shape |
+| TC-MULTI-048 | REQ-MULTI-008 | `TestREQ_MULTI_008_IdlePortsDoNotStarveBusyPort` | review finding, 2026-11-07 |
+| TC-MULTI-049 | REQ-MULTI-010 | `TestREQ_MULTI_010_CtrlCStopsEveryPortWhileOnePrints` | review finding, 2026-11-07 |
+| TC-MULTI-050 | REQ-MULTI-006 | `TestREQ_MULTI_006_SamePrinterDifferentCaseOneAfterAnother` | review finding, 2026-11-07 |
 | TC-ALLOW-001 | REQ-ALLOW-001 | `TestREQ_ALLOW_001_NoAllowKeyLoadsNilList` | Config without `allow` loads a nil list; catches: missing key parsed as empty list (blocks everyone) |
 | TC-ALLOW-002 | REQ-ALLOW-001 | `TestREQ_ALLOW_001_NilListAllowsEveryone` | nil `allow.List` allows every address family; catches: nil treated as deny-all |
 | TC-ALLOW-003 | REQ-ALLOW-002 | `TestREQ_ALLOW_002_ListedAddressOrBlockMatches/TC-ALLOW-003` | Exact address matches only itself; catches: string prefix match (`10.0.0.50`) |
@@ -343,6 +348,7 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-ALLOW-042 | REQ-ALLOW-007 | `TestREQ_ALLOW_007_ListOnLaterEntryOnly` | List on a later entry only; catches: `Allow` indexed by entries-with-list (shift) |
 | TC-ALLOW-043 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_NilIPNotAllowedByAList` | A list never allows a nil IP; catches: fail-open when the client IP is unknown |
 | TC-ALLOW-044 | REQ-ALLOW-004 | `TestREQ_ALLOW_004_MappedItemMatchesIPv4Client` | A mapped item matches the plain IPv4 client; catches: mapped item stored as /128 compared byte-wise |
+| TC-ALLOW-045 | REQ-ALLOW-006 | `TestREQ_ALLOW_006_LeadingZeroInEmbeddedIPv4Refused` | review finding, 2026-11-07 |
 | TC-UI-001 | REQ-UI-001 | `TestREQ_UI_001_DefaultPort9180RemoteOff` | No `ui` section → port 9180, remote off; catches: default 0 / 80 / 9100 |
 | TC-UI-002 | REQ-UI-001 | `TestREQ_UI_001_ConfiguredPortUsed` | `ui.port` 9181 is used; catches: section ignored, always default |
 | TC-UI-003 | REQ-UI-001 | `TestREQ_UI_001_BindsLoopbackAndServes` | UI bound to loopback only when remote is off; catches: bound to `0.0.0.0` / `:port` |

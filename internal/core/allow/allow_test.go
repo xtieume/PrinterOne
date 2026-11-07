@@ -177,3 +177,21 @@ func TestREQ_ALLOW_008_StringListsEveryItem(t *testing.T) {
 		t.Errorf("String() of a non-empty List = %q", s)
 	}
 }
+
+// TC-ALLOW-045: Go 1.10 reads the embedded IPv4 of `::ffff:010.0.0.5` with its leading zero while Go 1.17+ refuses
+// it; both editions must refuse it the same way.
+func TestREQ_ALLOW_006_LeadingZeroInEmbeddedIPv4Refused(t *testing.T) {
+	for _, bad := range []string{"::ffff:010.0.0.5", "::ffff:10.0.0.05", "::ffff:010.0.0.0/104", "64:ff9b::192.168.001.1"} {
+		if !hasLeadingZeroIPv4(strings.Split(bad, "/")[0]) {
+			t.Errorf("hasLeadingZeroIPv4(%q) = false, want true (Go 1.10 would accept it)", bad)
+		}
+		if _, idx, err := Parse([]string{"10.0.0.5", bad}); err == nil || idx != 1 {
+			t.Errorf("Parse([10.0.0.5 %q]) = index %d, err %v; want index 1 and an error", bad, idx, err)
+		}
+	}
+	for _, ok := range []string{"::ffff:10.0.0.5", "::ffff:0.0.0.0", "fd00::10", "2001:db8::0", "::ffff:10.0.0.0"} {
+		if hasLeadingZeroIPv4(ok) {
+			t.Errorf("hasLeadingZeroIPv4(%q) = true, want false", ok)
+		}
+	}
+}

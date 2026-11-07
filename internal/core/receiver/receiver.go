@@ -20,6 +20,7 @@ const (
 	IdleTimeout       = 60 * time.Second
 	SlotsMain         = 8
 	SlotsLegacy       = 2
+	AcceptWait        = 200 * time.Millisecond // longest a port holds a shared slot while no client arrives
 )
 
 type PrintFunc func(docName string, data []byte) error
@@ -159,15 +160,26 @@ func (s *Server) Serve() error {
 	if s.Pool != nil {
 		sem = s.Pool.sem
 	}
+	// With a shared Pool a port holds a slot only for AcceptWait at a time, so idle ports cannot starve busy ones
+	// (REQ-MULTI-008) while no connection is accepted before its slot is held (REQ-RECV-007).
+	var deadline interface{ SetDeadline(time.Time) error }
+	if s.Pool != nil {
+		deadline, _ = ln.(interface{ SetDeadline(time.Time) error })
+	}
 	backoff := 5 * time.Millisecond
 	for {
+		// ponytail: with Allow the check comes before the slot (TC-ALLOW-041: refused at once while slots are busy),
+		// so an allowed client may wait accepted for a slot.
 		preacquired := false
-		if s.Allow == nil && s.Pool == nil {
+		if s.Allow == nil {
 			select {
 			case sem <- struct{}{}:
 				preacquired = true
 			case <-stop:
 				goto acceptedDone
+			}
+			if deadline != nil {
+				deadline.SetDeadline(time.Now().Add(AcceptWait))
 			}
 		}
 		c, err := ln.Accept()
@@ -179,6 +191,9 @@ func (s *Server) Serve() error {
 			case <-stop:
 				goto acceptedDone
 			default:
+			}
+			if ne, ok := err.(net.Error); ok && ne.Timeout() && deadline != nil {
+				continue
 			}
 			time.Sleep(backoff)
 			backoff *= 2
@@ -204,6 +219,7 @@ func (s *Server) Serve() error {
 			select {
 			case sem <- struct{}{}:
 			case <-stop:
+				s.log(c.RemoteAddr().String(), 0, "dropped: shutdown")
 				c.Close()
 				goto acceptedDone
 			}
@@ -332,4 +348,15 @@ func (s *Server) Shutdown() {
 			<-done
 		}
 	})
+}
+
+// ShutdownAll shuts every server down at once and returns when all have stopped (REQ-MULTI-010): no port keeps
+// accepting new jobs while another finishes its print.
+func ShutdownAll(servers []*Server) {
+	var wg sync.WaitGroup
+	for _, s := range servers {
+		wg.Add(1)
+		go func(s *Server) { defer wg.Done(); s.Shutdown() }(s)
+	}
+	wg.Wait()
 }

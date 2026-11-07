@@ -97,10 +97,10 @@ func (l List) String() string {
 	return strings.Join(items, ", ")
 }
 
+// hasLeadingZeroIPv4 reports a leading zero in a dotted IPv4, alone or embedded at the end of an IPv6 address
+// (`::ffff:010.0.0.5`): Go 1.10 accepts those, Go 1.17+ refuses them.
 func hasLeadingZeroIPv4(s string) bool {
-	if strings.Contains(s, ":") {
-		return false
-	}
+	s = s[strings.LastIndex(s, ":")+1:]
 	parts := strings.Split(s, ".")
 	if len(parts) != 4 {
 		return false

@@ -260,11 +260,14 @@ func serve(path *string, env Env, openBrowser bool) int {
 	}
 	pool := receiver.NewSlotPool(slots)
 	locks := make(map[string]*sync.Mutex)
+	var serversMu sync.Mutex
+	var servers []*receiver.Server
 	manager := &webui.Listeners{Listen: func(p config.Printer, a allow.List) (func(), error) {
-		lock := locks[p.Printer]
+		key := strings.ToLower(p.Printer) // Windows printer names are case-insensitive
+		lock := locks[key]
 		if lock == nil {
 			lock = &sync.Mutex{}
-			locks[p.Printer] = lock
+			locks[key] = lock
 		}
 		var allowFn func(net.IP) bool
 		if a != nil {
@@ -274,6 +277,9 @@ func serve(path *string, env Env, openBrowser bool) int {
 		if e := srv.Listen(); e != nil {
 			return nil, e
 		}
+		serversMu.Lock()
+		servers = append(servers, srv) // ponytail: stopped servers stay listed (one per reload); a second Shutdown is a no-op
+		serversMu.Unlock()
 		fmt.Fprintf(output, "Listening on %s\nPrinter: %s\n", srv.ListenAddr(), p.Printer)
 		allowValue := a.String()
 		if allowValue == "" {
@@ -316,7 +322,14 @@ func serve(path *string, env Env, openBrowser bool) int {
 	<-env.Interrupt
 	stopUI()
 	stopped := make(chan struct{})
-	go func() { manager.Apply(&config.Config{}); close(stopped) }()
+	go func() {
+		serversMu.Lock()
+		all := append([]*receiver.Server(nil), servers...)
+		serversMu.Unlock()
+		receiver.ShutdownAll(all) // every port at once (REQ-MULTI-010)
+		manager.Apply(&config.Config{})
+		close(stopped)
+	}()
 	select {
 	case <-stopped:
 		return 0

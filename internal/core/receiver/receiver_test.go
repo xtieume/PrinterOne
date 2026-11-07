@@ -730,3 +730,38 @@ func TestREQ_LOG_001_PrinterNameLoggedVerbatim(t *testing.T) {
 		t.Fatalf("log %q, want the printer value verbatim between the quotes (no Go escaping)", lines)
 	}
 }
+
+// TC-LOG-021: a client accepted while waiting for a slot (accept-first Allow path) still gets its one line at
+// shutdown; a client never accepted (still in the backlog) needs none.
+func TestREQ_LOG_001_ConnectionWaitingForSlotLoggedOnShutdown(t *testing.T) {
+	listener := newDeadlineCountListener(t)
+	r := newRig(t, func(r *rig) {
+		r.srv.Slots = 1
+		r.srv.Idle = 5 * time.Second
+		r.srv.Allow = func(net.IP) bool { return true }
+		r.srv.Listener = listener
+	})
+	a := r.send([]byte("x")) // holds the only slot
+	defer a.Close()
+	time.Sleep(100 * time.Millisecond)
+	b := r.dial() // reaches the server while the only slot is busy
+	defer b.Close()
+	time.Sleep(300 * time.Millisecond)
+	accepted := listener.count()
+	r.close()
+	_, lines := r.snapshot()
+	addr := " " + b.LocalAddr().String() + " "
+	var mine []string
+	for _, l := range lines {
+		if strings.Contains(l, addr) {
+			mine = append(mine, l)
+		}
+	}
+	want := addr + "0B \"" + printerName + "\" dropped: shutdown"
+	if accepted == 2 && (len(mine) != 1 || !strings.HasSuffix(mine[0], want)) {
+		t.Fatalf("log %q: the waiting client was accepted; want exactly one line ending %q", lines, want)
+	}
+	if accepted == 1 && len(mine) != 0 {
+		t.Fatalf("log %q: a client never accepted has a line", lines)
+	}
+}

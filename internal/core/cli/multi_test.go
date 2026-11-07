@@ -589,3 +589,61 @@ func TestREQ_MULTI_009_SinglePrinterStartUpLine(t *testing.T) {
 		t.Fatalf("stdout %q, want %q once", r.stdout.String(), want)
 	}
 }
+
+// TC-MULTI-049: Ctrl+C while A prints; the other ports must stop at once, not after A's print ends.
+func TestREQ_MULTI_010_CtrlCStopsEveryPortWhileOnePrints(t *testing.T) {
+	r, ports := multiRig(t, "main", "A", "B", "C")
+	defer r.cleanup()
+	gate := make(chan struct{})
+	r.sp.gate = gate
+	r.start("serve", "--config", r.cfg)
+	r.waitReady()
+	sendPort(t, ports[0], "a").Close()
+	select {
+	case <-r.sp.writing:
+	case <-time.After(3 * time.Second):
+		close(gate)
+		t.Fatal("job on A never reached WritePrinter")
+	}
+	r.sig <- os.Interrupt
+	time.Sleep(300 * time.Millisecond)
+	for _, p := range ports[1:] {
+		if c, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(p), 300*time.Millisecond); err == nil {
+			c.Write([]byte("late"))
+			c.Close()
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+	code, ok := r.waitExit(5 * time.Second)
+	docs := r.sp.done()
+	if !ok || code != 0 {
+		t.Fatalf("returned=%v code=%d, want exit 0", ok, code)
+	}
+	if a := docsOn(docs, "A"); len(a) != 1 || a[0] != "a" || len(docsOn(docs, "B")) != 0 || len(docsOn(docs, "C")) != 0 {
+		t.Fatalf("documents %+v; want only `a` on A: B and C must stop at once on Ctrl+C", docs)
+	}
+}
+
+// TC-MULTI-050: Windows printer names are case-insensitive, so `A` and `a` are one printer.
+func TestREQ_MULTI_006_SamePrinterDifferentCaseOneAfterAnother(t *testing.T) {
+	r, ports := multiRig(t, "main", "A", "a")
+	defer r.cleanup()
+	gate := make(chan struct{})
+	r.sp.gate = gate
+	r.start("serve", "--config", r.cfg)
+	r.waitReady()
+	sendPort(t, ports[0], "one").Close()
+	sendPort(t, ports[1], "two").Close()
+	time.Sleep(500 * time.Millisecond)
+	n := r.sp.writes()
+	close(gate)
+	docs := r.sp.waitDone(2, 3*time.Second)
+	r.sp.mu.Lock()
+	maxOpen := r.sp.maxOpen
+	r.sp.mu.Unlock()
+	if n != 1 || len(docs) != 2 || maxOpen != 1 {
+		t.Fatalf("writes in progress %d (want 1), documents %d (want 2), max open documents %d (want 1)", n, len(docs), maxOpen)
+	}
+	r.stop()
+}
