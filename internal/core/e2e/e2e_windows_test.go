@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -124,14 +125,24 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
+// Go 1.10 does not seed math/rand, so each test process seeds its own source.
+var portRand = rand.New(rand.NewSource(time.Now().UnixNano() + int64(os.Getpid())))
+
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Fatal(err)
+	// Pick from 20000-29999, outside the ephemeral ranges of macOS, Linux and Windows: a port taken from ":0"
+	// and released can be handed straight to another test process's ":0" listener (seen as a flaky
+	// "address already in use").
+	for i := 0; i < 200; i++ {
+		port := 20000 + portRand.Intn(10000)
+		l, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
+		if err == nil {
+			l.Close()
+			return port
+		}
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	t.Fatal("no free port in 20000-29999")
+	return 0
 }
 
 func configJSON(printer string, port int) string {

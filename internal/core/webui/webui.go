@@ -13,8 +13,8 @@
 // Form fields. POST /printers: token, action (add | edit | remove), index (edit, remove), name, printer (chosen
 // from the installed list), printer_text (typed; wins when non-empty), port, allow (one item per line, blank lines
 // ignored). POST /test: token, name. POST /settings: token, log_dir, keep_days, ui_port, remote ("on"), password
-// (empty keeps the stored one). A valid POST answers 303 to its page; an invalid one re-renders the page (200)
-// with the loader's message next to the field and writes nothing.
+// (empty keeps the stored one). A valid POST answers 303 to its page; an invalid one re-renders the page (400)
+// with the loader's message next to the field and writes nothing. POST bodies are capped at MaxBodyBytes.
 //
 // API writes need header X-PrinterOne-Token. JSON: /api/status {"printers":[{"name","printer","port","allow",
 // "jobs_today","last_result"}],"ui_url","log_path"}; /api/printers and POST /api/printers body [{"name","printer",
@@ -45,6 +45,9 @@ const (
 	LogPageLines   = 200
 	MaxAPILogLines = 1000
 )
+
+// MaxBodyBytes bounds every POST body (forms and API).
+const MaxBodyBytes = 1 << 20
 
 // TokenHeader carries the per-process token on API writes.
 const TokenHeader = "X-PrinterOne-Token"
@@ -116,7 +119,8 @@ func Start(ui config.UI, h http.Handler, open func(url string) error) (addr stri
 	if err != nil {
 		return "", nil, err
 	}
-	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
+	// ReadTimeout also ends a live log stream; the browser reconnects with Last-Event-ID and misses nothing.
+	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute}
 	go server.Serve(ln)
 	addr = ln.Addr().String()
 	if open != nil {
@@ -152,8 +156,9 @@ type Listeners struct {
 	mu      sync.Mutex
 }
 
-// Apply makes the running listeners match c: stops removed and changed ones, starts new and changed ones, leaves
-// the others running. A start error is returned after the rest were applied.
+// Apply makes the running listeners match c: keeps unchanged ones (a name-only change included), stops every
+// removed or changed one, then starts the new ones, so ports can move between printers in one save. A start error
+// is returned after the rest were applied.
 func (l *Listeners) Apply(c *config.Config) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -163,34 +168,34 @@ func (l *Listeners) Apply(c *config.Config) error {
 	if c == nil {
 		c = &config.Config{}
 	}
-	if l.running == nil {
-		l.running = make(map[string]listener)
-	}
 	next := make(map[string]listener)
-	stopped := make(map[string]bool)
-	var first error
+	kept := make(map[string]bool)
+	var start []int
 	for i, p := range c.Printers {
-		var a allow.List
-		if i < len(c.Allow) {
-			a = c.Allow[i]
-		}
-		key := listenerKey(p, a)
+		key := listenerKey(p, allowAt(c, i))
 		found := ""
 		for name, old := range l.running {
-			if old.key == key {
+			if old.key == key && !kept[name] {
 				found = name
 				break
 			}
 		}
-		if found != "" {
-			next[p.Name] = l.running[found]
+		if found == "" {
+			start = append(start, i)
 			continue
 		}
-		old, hadOld := l.running[p.Name]
-		if hadOld {
+		kept[found] = true
+		next[p.Name] = l.running[found]
+	}
+	for name, old := range l.running {
+		if !kept[name] {
 			old.stop()
-			stopped[p.Name] = true
 		}
+	}
+	var first error
+	for _, i := range start {
+		p := c.Printers[i]
+		a := allowAt(c, i)
 		stop, err := l.Listen(p, a)
 		if err != nil {
 			if first == nil {
@@ -198,22 +203,17 @@ func (l *Listeners) Apply(c *config.Config) error {
 			}
 			continue
 		}
-		next[p.Name] = listener{key: key, stop: stop}
-	}
-	for name, old := range l.running {
-		kept := false
-		for _, current := range next {
-			if current.key == old.key {
-				kept = true
-				break
-			}
-		}
-		if !kept && !stopped[name] {
-			old.stop()
-		}
+		next[p.Name] = listener{key: listenerKey(p, a), stop: stop}
 	}
 	l.running = next
 	return first
+}
+
+func allowAt(c *config.Config, i int) allow.List {
+	if i < len(c.Allow) {
+		return c.Allow[i]
+	}
+	return nil
 }
 
 type listener struct {

@@ -291,7 +291,7 @@ func serve(path *string, env Env, openBrowser bool) int {
 		return stop, nil
 	}}
 	// Start UI before listeners so a busy UI port fails without leaving print ports bound.
-	d := webui.Deps{Config: cfg, ConfigPath: cfg.Path, Load: func(p string) (*config.Config, error) { return config.Load(config.Lookup{Flag: p}) }, Installed: func() ([]string, error) { return spool.List(env.Spool) }, Stats: func(name string) (int, string) { return webui.LogStats(absLogPath, name, time.Now()) }, LogPath: absLogPath, Apply: manager.Apply, UI: ui}
+	d := webui.Deps{Config: cfg, ConfigPath: cfg.Path, Load: func(p string) (*config.Config, error) { return config.Load(config.Lookup{Flag: p}) }, Installed: func() ([]string, error) { return spool.List(env.Spool) }, Stats: func(name string) (int, string) { return webui.LogStats(absLogPath, name, time.Now()) }, LogPath: absLogPath, Apply: manager.Apply, UI: ui, Poll: 500 * time.Millisecond}
 	handler := webui.New(d)
 	uiAddr, stopUI, err := webui.Start(ui, handler, func(u string) error {
 		if openBrowser {

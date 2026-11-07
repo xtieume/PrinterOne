@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -37,7 +38,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	if s.d.UI.Remote {
 		user, pass, ok := r.BasicAuth()
-		if !ok || user != BasicUser || pass != s.d.UI.Password {
+		if !ok || subtle.ConstantTimeCompare([]byte(user), []byte(BasicUser))&subtle.ConstantTimeCompare([]byte(pass), []byte(s.d.UI.Password)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Basic realm="PrinterOne"`)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
@@ -53,13 +54,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") && r.Method == http.MethodPost {
-		if r.Header.Get(TokenHeader) != s.token {
+		if !s.validToken(r.Header.Get(TokenHeader)) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid token"})
 			return
 		}
 	} else if r.Method == http.MethodPost && r.URL.Path != "/" {
-		if r.ParseForm() != nil || r.Form.Get("token") != s.token {
+		if r.ParseForm() != nil {
+			http.Error(w, "invalid or too large form", http.StatusBadRequest)
+			return
+		}
+		if !s.validToken(r.Form.Get("token")) {
 			http.Error(w, "invalid token", http.StatusForbidden)
 			return
 		}
@@ -161,6 +169,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+func (s *Server) validToken(v string) bool {
+	return subtle.ConstantTimeCompare([]byte(v), []byte(s.token)) == 1
 }
 func localRemote(v string) bool {
 	h, _, err := net.SplitHostPort(v)
@@ -328,10 +339,13 @@ func (s *Server) savePrinters(w http.ResponseWriter, r *http.Request) {
 	}
 	raw := s.readRoot()
 	old, _ := raw["printers"].([]interface{})
+	if action == "remove" && idx < len(old) {
+		old = append(old[:idx:idx], old[idx+1:]...) // drop the removed entry's raw settings with it
+	}
 	parr := []interface{}{}
 	for i, v := range p {
 		var m map[string]interface{}
-		if action != "add" && i < len(old) {
+		if i < len(old) && !(action == "add" && i == idx) {
 			m, _ = old[i].(map[string]interface{})
 		}
 		if m == nil {
@@ -403,35 +417,38 @@ func (s *Server) apiSavePrinters(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.printerJSON())
 }
 func (s *Server) testPrinter(w http.ResponseWriter, r *http.Request) {
-	name := r.Form.Get("name")
-	cfg, _ := s.configSnapshot()
-	for _, p := range s.printers() {
-		if p.Name == name {
-			if i := indexPrinter(s.printers(), name); cfg != nil && i < len(cfg.Allow) && cfg.Allow[i] != nil && !cfg.Allow[i].Allows(net.ParseIP("127.0.0.1")) {
-				s.formError(w, "name", "test", "test rejected by allowlist")
-				return
-			}
-			payload := fmt.Sprintf("PrinterOne test page\r\nPrinter: %s\r\nTime: %s\r\n", p.Name, s.now().Format(time.RFC3339))
-			c, e := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", p.Port), 2*time.Second)
-			if e == nil {
-				c.SetWriteDeadline(time.Now().Add(3 * time.Second))
-				_, e = io.WriteString(c, payload)
-				if e == nil {
-					if x, ok := c.(*net.TCPConn); ok {
-						x.CloseWrite()
-					}
-				}
-				c.Close()
-			}
-			if e != nil {
-				s.formError(w, "name", "test", e.Error())
-				return
-			}
-			http.Redirect(w, r, "/test", 303)
-			return
-		}
+	if e := s.sendTest(r.Form.Get("name")); e != nil {
+		s.formError(w, "name", "test", e.Error())
+		return
 	}
-	s.formError(w, "name", "test", "unknown printer")
+	http.Redirect(w, r, "/test", 303)
+}
+
+// sendTest sends a test page from 127.0.0.1 through the named printer's port (never around its allowlist).
+func (s *Server) sendTest(name string) error {
+	cfg, _ := s.configSnapshot()
+	i := indexPrinter(s.printers(), name)
+	if cfg == nil || i < 0 {
+		return fmt.Errorf("unknown printer")
+	}
+	p := cfg.Printers[i]
+	if i < len(cfg.Allow) && cfg.Allow[i] != nil && !cfg.Allow[i].Allows(net.ParseIP("127.0.0.1")) {
+		return fmt.Errorf("test rejected by allowlist")
+	}
+	payload := fmt.Sprintf("PrinterOne test page\r\nPrinter: %s\r\nTime: %s\r\n", p.Name, s.now().Format(time.RFC3339))
+	c, e := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", p.Port), 2*time.Second)
+	if e != nil {
+		return e
+	}
+	defer c.Close()
+	c.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	if _, e = io.WriteString(c, payload); e != nil {
+		return e
+	}
+	if x, ok := c.(*net.TCPConn); ok {
+		x.CloseWrite()
+	}
+	return nil
 }
 func indexPrinter(p []config.Printer, n string) int {
 	for i, v := range p {
@@ -449,25 +466,13 @@ func (s *Server) apiTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid JSON", "field": "name"})
 		return
 	}
-	r.Form = map[string][]string{"name": {v.Name}}
-	rec := &capture{header: make(http.Header)}
-	s.testPrinter(rec, r)
-	if rec.status == 303 {
-		writeJSON(w, 200, map[string]string{"status": "sent"})
-	} else {
-		writeJSON(w, 400, map[string]string{"error": rec.body.String(), "field": "name"})
+	if e := s.sendTest(v.Name); e != nil {
+		writeJSON(w, 400, map[string]string{"error": e.Error(), "field": "name"})
+		return
 	}
+	writeJSON(w, 200, map[string]string{"status": "sent"})
 }
 
-type capture struct {
-	header http.Header
-	status int
-	body   strings.Builder
-}
-
-func (c *capture) Header() http.Header         { return c.header }
-func (c *capture) WriteHeader(n int)           { c.status = n }
-func (c *capture) Write(b []byte) (int, error) { return c.body.Write(b) }
 func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	raw := s.readRoot()
 	var root map[string]interface{}
@@ -522,6 +527,8 @@ func (s *Server) formErrorValues(w http.ResponseWriter, field, page, msg string,
 	if page == "printers" {
 		d.Installed, _ = s.installed()
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusBadRequest) // the page still shows the message; app.js sees a failure
 	s.render(w, page, d)
 }
 func (s *Server) readRoot() map[string]interface{} {
@@ -540,7 +547,10 @@ func (s *Server) readRoot() map[string]interface{} {
 func (s *Server) persist(raw map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	oldUI, _ := config.UIOf(s.d.Config)
+	oldUI, e := config.UIOf(s.d.Config)
+	if e != nil || s.d.Config == nil {
+		oldUI = s.d.UI // no config file yet: compare with the settings the UI is running with
+	}
 	path := s.d.ConfigPath
 	if path == "" && s.d.Config != nil {
 		path = s.d.Config.Path
@@ -553,7 +563,7 @@ func (s *Server) persist(raw map[string]interface{}) error {
 		return e
 	}
 	dir := filepath.Dir(path)
-	f, e := ioutil.TempFile(dir, "config-*.tmp")
+	f, e := ioutil.TempFile(dir, "config-") // Go 1.10: a prefix, no pattern
 	if e != nil {
 		return e
 	}
@@ -574,7 +584,11 @@ func (s *Server) persist(raw map[string]interface{}) error {
 	if e = f.Close(); e != nil {
 		return e
 	}
-	candidate, e := config.Load(config.Lookup{Flag: tmp})
+	load := s.d.Load
+	if load == nil {
+		load = func(p string) (*config.Config, error) { return config.Load(config.Lookup{Flag: p}) }
+	}
+	candidate, e := load(tmp)
 	if e != nil {
 		msg := strings.Replace(e.Error(), tmp, path, 1)
 		return fmt.Errorf("%s", msg)
@@ -678,10 +692,15 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()
 	pos, _ := f.Seek(0, io.SeekCurrent)
-	ticker := time.NewTicker(s.d.Poll)
-	if s.d.Poll == 0 {
-		ticker.Reset(500 * time.Millisecond)
+	// EventSource reconnects with the last id it got (the server's ReadTimeout ends long streams): resume there.
+	if v, e := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); e == nil && v >= 0 && v <= pos {
+		pos = v
 	}
+	poll := s.d.Poll
+	if poll <= 0 {
+		poll = 500 * time.Millisecond
+	}
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
 		select {
@@ -710,11 +729,20 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 			}
 			f.Seek(pos, io.SeekStart)
 			sc := bufio.NewScanner(f)
+			var lines []string
 			for sc.Scan() {
-				fmt.Fprintf(w, "data: %s\n\n", sc.Text())
-				fl.Flush()
+				lines = append(lines, sc.Text())
 			}
 			pos, _ = f.Seek(0, io.SeekCurrent)
+			for i, line := range lines {
+				if i == len(lines)-1 {
+					fmt.Fprintf(w, "id: %d\n", pos)
+				}
+				fmt.Fprintf(w, "data: %s\n\n", line)
+			}
+			if len(lines) > 0 {
+				fl.Flush()
+			}
 		}
 	}
 }

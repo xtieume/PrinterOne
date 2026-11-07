@@ -26,10 +26,16 @@ document.querySelectorAll('form[method="post"]').forEach(form => {
   form.addEventListener("submit", async event => {
     if (!window.fetch) return;
     event.preventDefault();
-    const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
+    const response = await fetch(form.action, { method: "POST", body: new URLSearchParams(new FormData(form)) });
+    const text = response.ok ? "" : await response.text();
+    const page = text && new DOMParser().parseFromString(text, "text/html").querySelector("#app");
+    if (page) {
+      document.querySelector("#app").replaceWith(document.importNode(page, true)); // the page with its field errors; its forms post natively
+      return;
+    }
     const message = document.querySelector("[data-form-result]") || document.createElement("p");
     message.dataset.formResult = "";
-    message.textContent = response.ok ? "Saved." : (await response.text());
+    message.textContent = response.ok ? "Saved." : text;
     if (!message.parentNode) form.appendChild(message);
     if (response.ok) document.dispatchEvent(new CustomEvent("printerone-refresh"));
   });

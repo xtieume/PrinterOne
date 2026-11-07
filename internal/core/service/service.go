@@ -543,8 +543,6 @@ func runSession(o RunOptions, session Session, d Deps) {
 	locks := make(map[string]*sync.Mutex)
 	var serversMu sync.Mutex
 	var servers []*receiver.Server
-	var doneMu sync.Mutex
-	dones := []chan struct{}{}
 	manager := &webui.Listeners{Listen: func(p config.Printer, a allow.List) (func(), error) {
 		key := strings.ToLower(p.Printer) // Windows printer names are case-insensitive
 		lock := locks[key]
@@ -569,11 +567,7 @@ func runSession(o RunOptions, session Session, d Deps) {
 			allowValue = "all"
 		}
 		fmt.Fprintf(log, "%s -> %s on %s allow: %s\n", p.Name, p.Printer, srv.ListenAddr(), allowValue)
-		d := make(chan struct{})
-		doneMu.Lock()
-		dones = append(dones, d)
-		doneMu.Unlock()
-		go func() { srv.Serve(); close(d) }()
+		go srv.Serve()
 		return func() { srv.Shutdown() }, nil
 	}}
 	if err = manager.Apply(cfg); err != nil {
@@ -583,7 +577,7 @@ func runSession(o RunOptions, session Session, d Deps) {
 		return
 	}
 	logPath := logfile.Path(logDir)
-	uiDeps := webui.Deps{Config: cfg, ConfigPath: o.ConfigPath, Installed: func() ([]string, error) { return spool.List(o.Spool) }, Stats: func(name string) (int, string) { return webui.LogStats(logPath, name, time.Now()) }, LogPath: logPath, Apply: manager.Apply, UI: ui}
+	uiDeps := webui.Deps{Config: cfg, ConfigPath: o.ConfigPath, Installed: func() ([]string, error) { return spool.List(o.Spool) }, Stats: func(name string) (int, string) { return webui.LogStats(logPath, name, time.Now()) }, LogPath: logPath, Apply: manager.Apply, UI: ui, Poll: 500 * time.Millisecond}
 	uiAddr, stopUI, err := webui.Start(ui, webui.New(uiDeps), nil)
 	if err != nil {
 		manager.Apply(&config.Config{})
@@ -599,57 +593,38 @@ func runSession(o RunOptions, session Session, d Deps) {
 		o.Ready(addr)
 	}
 	session.Report(Running, 0)
-	var receiversDone <-chan struct{}
-	if len(dones) > 0 {
-		receiversDone = allDone(dones)
+	// Only the SCM stops the service: a UI save may replace every listener (REQ-UI-009).
+	<-session.Controls()
+	session.Report(StopPending, 0)
+	stopUI()
+	stopped := make(chan struct{})
+	go func() {
+		serversMu.Lock()
+		all := append([]*receiver.Server(nil), servers...)
+		serversMu.Unlock()
+		receiver.ShutdownAll(all) // every port at once (REQ-MULTI-010)
+		manager.Apply(&config.Config{})
+		close(stopped)
+	}()
+	newTicker := d.NewTicker
+	if newTicker == nil {
+		newTicker = func(d time.Duration) (<-chan time.Time, func()) { t := time.NewTicker(d); return t.C, t.Stop }
 	}
-	select {
-	case <-session.Controls():
-		session.Report(StopPending, 0)
-		stopUI()
-		stopped := make(chan struct{})
-		go func() {
-			serversMu.Lock()
-			all := append([]*receiver.Server(nil), servers...)
-			serversMu.Unlock()
-			receiver.ShutdownAll(all) // every port at once (REQ-MULTI-010)
-			manager.Apply(&config.Config{})
-			close(stopped)
-		}()
-		newTicker := d.NewTicker
-		if newTicker == nil {
-			newTicker = func(d time.Duration) (<-chan time.Time, func()) { t := time.NewTicker(d); return t.C, t.Stop }
-		}
-		ticks, stopTicker := newTicker(2 * time.Second)
-		defer stopTicker()
-		checkpoint := uint32(1)
-		for {
-			select {
-			case <-stopped:
-				session.Report(Stopped, 0)
-				return
-			case <-ticks:
-				checkpoint++
-				if p, ok := session.(interface{ ReportPending(uint32) }); ok {
-					p.ReportPending(checkpoint)
-				}
+	ticks, stopTicker := newTicker(2 * time.Second)
+	defer stopTicker()
+	checkpoint := uint32(1)
+	for {
+		select {
+		case <-stopped:
+			session.Report(Stopped, 0)
+			return
+		case <-ticks:
+			checkpoint++
+			if p, ok := session.(interface{ ReportPending(uint32) }); ok {
+				p.ReportPending(checkpoint)
 			}
 		}
-	case <-receiversDone:
-		stopUI()
-		session.Report(Stopped, 0)
 	}
-}
-
-func allDone(done []chan struct{}) <-chan struct{} {
-	all := make(chan struct{})
-	go func() {
-		for _, d := range done {
-			<-d
-		}
-		close(all)
-	}()
-	return all
 }
 
 func allowText(cfg *config.Config, i int) string {

@@ -440,3 +440,15 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-UI-089 | REQ-UI-011 | `TestREQ_UI_011_RefreshWithoutJS` | Log page has a refresh that works without JS; catches: refresh only through JS |
 | TC-UI-090 | REQ-UI-021 | `TestREQ_UI_021_RejectsForeignHostWhenRemoteOff` | spec Q5, 2026-11-07 |
 | TC-UI-091 | REQ-UI-022 | `TestREQ_UI_022_AllResponsesDenyFraming` | spec Q5, 2026-11-07 |
+| TC-UI-092 | REQ-UI-008 | `TestREQ_UI_008_AddKeepsOtherPrintersAllowAndUnknownKeys` | review finding, 2026-11-07 |
+| TC-UI-093 | REQ-UI-008 | `TestREQ_UI_008_RemoveKeepsSettingsWithTheirPrinter` | review finding, 2026-11-07 |
+| TC-UI-094 | REQ-UI-016 | `TestREQ_UI_016_StreamWithPollUnsetDeliversNewLine` | review finding, 2026-11-07 |
+| TC-UI-095 | REQ-UI-016 | `TestREQ_UI_016_StreamResumesFromLastEventID` | review finding, 2026-11-07 |
+| TC-UI-096 | REQ-UI-008 | `TestREQ_UI_008_SaveTempFileNameHasNoPattern` | review finding, 2026-11-07 |
+| TC-UI-097 | REQ-UI-016 | `TestREQ_UI_016_InvalidSaveAnswers400WithFieldMessage` | review finding, 2026-11-07 |
+| TC-UI-098 | REQ-UI-004 | `TestREQ_UI_004_WrongLengthPasswordRefused` | review finding, 2026-11-07 |
+| TC-UI-099 | REQ-UI-018 | `TestREQ_UI_018_APITestErrorIsJSONMessage` | review finding, 2026-11-07 |
+| TC-UI-100 | REQ-UI-007 | `TestREQ_UI_007_OversizedPostRefused` | review finding, 2026-11-07 |
+| TC-UI-101 | REQ-UI-012 | `TestREQ_UI_012_FirstSaveNeedsNoRestart` | review finding, 2026-11-07 |
+| TC-UI-102 | REQ-UI-009 | `TestREQ_UI_009_PortSwapInOneSave` | review finding, 2026-11-07 |
+| TC-UI-103 | REQ-UI-009 | `TestREQ_UI_009_ServiceKeepsRunningWhenUIReplacesListeners` | review finding, 2026-11-07 |
