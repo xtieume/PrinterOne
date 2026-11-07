@@ -11,6 +11,7 @@ import (
 	"github.com/xtieume/PrinterOne/internal/core/buildinfo"
 	"github.com/xtieume/PrinterOne/internal/core/config"
 	"github.com/xtieume/PrinterOne/internal/core/receiver"
+	"github.com/xtieume/PrinterOne/internal/core/service"
 	"github.com/xtieume/PrinterOne/internal/core/spool"
 )
 
@@ -23,7 +24,9 @@ type Env struct {
 	Stdout    io.Writer
 	Stderr    io.Writer
 	Interrupt <-chan os.Signal  // Ctrl+C
-	Ready     func(addr string) // called once serve is listening; nil in production
+	Ready     func(addr string) // called once serve or service run is listening; nil in production
+	ExePath   string            // absolute path of the running exe (service command line)
+	Service   service.Deps      // service.System() in production
 }
 
 // Run executes one command line (without the program name) and returns the process exit code.

@@ -143,3 +143,45 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-RECV-029 | REQ-RECV-007 | `TestREQ_RECV_007_ClientWaitsInBacklogUntilSlotFrees` | review finding P1-2, 2026-11-07 |
 | TC-CFG-045 | REQ-CFG-003 | `TestREQ_CFG_003_LeadingUTF8BOMIgnored` | review finding P2-2, 2026-11-07 |
 | TC-CFG-046 | REQ-CFG-005 | `TestREQ_CFG_005_TopLevelMustBeObject` | review finding P3-4, 2026-11-07 |
+| TC-SVC-001 | REQ-SVC-001 | `TestREQ_SVC_001_InstallWithoutAdminChangesNothing` | Install without admin changes nothing; catches: admin check missing or done after mutating the SCM |
+| TC-SVC-002 | REQ-SVC-001 | `TestREQ_SVC_001_AdminCheckedBeforeConfig` | Admin checked before the config; catches: config validated before the admin check |
+| TC-SVC-003 | REQ-SVC-001 | `TestREQ_SVC_001_UninstallWithoutAdminChangesNothing` | Uninstall without admin changes nothing; catches: uninstall path skips the admin check |
+| TC-SVC-004 | REQ-SVC-002 | `TestREQ_SVC_002_InvalidConfigExits2ChangesNothing` | Bad JSON config exits 2, nothing changed; catches: rule or service written before validation; exit 1 |
+| TC-SVC-005 | REQ-SVC-002 | `TestREQ_SVC_002_InvalidConfigExits2ChangesNothing` | Missing `--config` file exits 2; catches: missing flag file falls through to exe-folder config |
+| TC-SVC-006 | REQ-SVC-002 | `TestREQ_SVC_002_ConfigLookedUpLikeServe` | Config found next to the exe like `serve`; catches: install requiring `--config`; lookup not shared with serve |
+| TC-SVC-007 | REQ-SVC-003 | `TestREQ_SVC_003_CreatesServiceWithSettings` | Fresh install creates the service with §2.1 settings; catches: unquoted paths (exe with a space); `serve` instead of `service run`; manual start |
+| TC-SVC-008 | REQ-SVC-003 | `TestREQ_SVC_003_RelativeConfigBecomesAbsolute` | Relative `--config` becomes absolute in the command line; catches: relative path stored; service (cwd System32) cannot find it |
+| TC-SVC-009 | REQ-SVC-004 | `TestREQ_SVC_004_ExistingServiceUpdated` | Existing service updated, not recreated; catches: Create on existing (ERROR_SERVICE_EXISTS → exit 1); delete-and-recreate |
+| TC-SVC-010 | REQ-SVC-005 | `TestREQ_SVC_005_RuleReplacedDeleteThenAdd` | Rule replaced: delete every PrinterOne rule, then one add; catches: add without delete (duplicate rules); add before delete (deletes the new rule) |
+| TC-SVC-011 | REQ-SVC-006 | `TestREQ_SVC_006_StartsAndWaitsForRunning` | Stopped service started, waited for, success line; catches: success printed right after Start without waiting |
+| TC-SVC-012 | REQ-SVC-006 | `TestREQ_SVC_006_RunningServiceRestarted` | Running service is restarted; catches: Start on a running service (ERROR_SERVICE_ALREADY_RUNNING) or no restart (old settings keep running) |
+| TC-SVC-013 | REQ-SVC-006 | `TestREQ_SVC_006_RunningWithin30sSucceeds` | Running reached at 29 s still succeeds; catches: timeout shorter than 30 s |
+| TC-SVC-014 | REQ-SVC-007 | `TestREQ_SVC_007_RuleAddFailureRollsBack` | Rule add failure rolls back a created service; catches: service left installed; error swallowed |
+| TC-SVC-015 | REQ-SVC-007 | `TestREQ_SVC_007_StartFailureRollsBack` | Start failure rolls back service and rule; catches: rule left open; service left |
+| TC-SVC-016 | REQ-SVC-007 | `TestREQ_SVC_007_ExistingServiceNotDeletedOnFailure` | Start failure keeps a pre-existing service; catches: rollback deletes a service it did not create |
+| TC-SVC-017 | REQ-SVC-007 | `TestREQ_SVC_007_StartTimeoutRollsBack` | Never running within 30 s is a start failure; catches: waits forever; gives up early |
+| TC-SVC-018 | REQ-SVC-008 | `TestREQ_SVC_008_UninstallStopsWaitsDeletesRemovesRule` | Uninstall stops, waits, deletes, removes rule; catches: Delete while still running (marked for deletion); rule left |
+| TC-SVC-019 | REQ-SVC-008 | `TestREQ_SVC_008_NothingInstalledExits0` | Nothing installed still exits 0; catches: ERROR_SERVICE_DOES_NOT_EXIST reported as failure |
+| TC-SVC-020 | REQ-SVC-008 | `TestREQ_SVC_008_DeleteFailureExits1` | Delete failure is reported; catches: failure swallowed, success line printed |
+| TC-SVC-021 | REQ-SVC-008 | `TestREQ_SVC_017_WindowsServiceInstallPrintUninstall` (windows-e2e, MANUAL:admin with CI run URL) | Uninstall keeps config and logs (assertion inside the TC-SVC-039 run); catches: uninstall cleans the data dir |
+| TC-SVC-022 | REQ-SVC-009 | `TestREQ_SVC_009_ConsoleRunExits2` | `service run` from a console exits 2; catches: falls back to serving in the console; usage text |
+| TC-SVC-023 | REQ-SVC-010 | `TestREQ_SVC_010_ServesJobUnderSCM` | Under SCM a job is printed; catches: receiver not started; status never Running |
+| TC-SVC-024 | REQ-SVC-010 | `TestREQ_SVC_010_LegacyLimitUnderSCM` | Legacy edition limit applies under SCM; catches: main limit (8) or no limit used under the service |
+| TC-SVC-025 | REQ-SVC-011 | `TestREQ_SVC_011_LinesAppendedToLogFile` | Start-up and connection lines go to the log file; catches: lines to stdout (lost under SCM); folder not created → open fails |
+| TC-SVC-026 | REQ-SVC-011 | `TestREQ_SVC_011_AppendsToExistingLog` | Log file appended, not truncated; catches: `os.Create` truncating each start |
+| TC-SVC-027 | REQ-SVC-011 | `TestREQ_SVC_011_FailingLogWriteKeepsServing` | Failing log writes do not stop the service; catches: log error treated as fatal |
+| TC-SVC-028 | REQ-SVC-012 | `TestREQ_SVC_012_ConfigErrorStopsWithCode2` | Config error under SCM: logged, exit code 2; catches: exit code 1 / 0; error only on stderr |
+| TC-SVC-029 | REQ-SVC-012 | `TestREQ_SVC_012_BusyPortStopsWithCode1` | Busy port under SCM: logged, exit code 1; catches: code 2; occupant killed |
+| TC-SVC-030 | REQ-SVC-013 | `TestREQ_SVC_013_StopDropsReceivingPrintsReceived` | Stop drops receiving, prints received, reports in order; catches: no StopPending; partial printed; received job lost |
+| TC-SVC-031 | REQ-SVC-013 | `TestREQ_SVC_013_ShutdownLikeStop` | Shutdown request behaves like stop; catches: only ControlStop handled |
+| TC-SVC-032 | REQ-SVC-014 | `TestREQ_SVC_014_VistaUsesAdvfirewall` | Vista+ exact advfirewall arguments; catches: major 6 treated as XP (`<= 6`); `dir=out`; missing protocol |
+| TC-SVC-033 | REQ-SVC-015 | `TestREQ_SVC_015_XPInstallOpensPort` | XP install opens the port with portopening; catches: advfirewall on XP (does not exist there) |
+| TC-SVC-034 | REQ-SVC-015 | `TestREQ_SVC_015_XPUninstallClosesConfiguredPort` | XP uninstall closes the configured port; catches: port taken from nowhere / default 9100 |
+| TC-SVC-035 | REQ-SVC-015 | `TestREQ_SVC_015_XPUnreadableConfigWarnsExits0` | XP uninstall with unreadable config warns, exit 0; catches: uninstall aborts with exit 1/2 |
+| TC-SVC-036 | REQ-SVC-015 | `TestREQ_SVC_015_XPInstallClosesOldPort` | XP install over an existing service closes the old port; catches: old port left open |
+| TC-SVC-037 | REQ-SVC-016 | `TestREQ_SVC_016_NetshFailureReportsOutput` | Uninstall netsh failure reported with its output; catches: any netsh non-zero ignored |
+| TC-SVC-038 | REQ-SVC-016 | `TestREQ_SVC_016_NoRulesMatchIsNotFailure` | "No rules match" on removal is not a failure; catches: every non-zero delete treated as failure (fresh install always fails) |
+| TC-SVC-039 | REQ-SVC-017 | `TestREQ_SVC_017_WindowsServiceInstallPrintUninstall` (windows-e2e, MANUAL:admin with CI run URL) | Windows e2e install → job → uninstall; catches: fake-only SCM code that never worked against advapi32 |
+| TC-SVC-040 | REQ-SVC-018 | `scripts/harness check core-go110` | Go 1.10.8 builds and tests the service code; catches: Go 1.11+ API in service code |
+| TC-SVC-041 | REQ-SVC-008 | `TestREQ_SVC_008_StopTimeoutGivesUpAfter30s` | Stop that never completes: uninstall gives up after 30 s; catches: waits forever; deletes a running service |
+| TC-SVC-042 | REQ-SVC-010 | `TestREQ_SVC_010_MainLimitUnderSCM` | Main edition limit (8) under SCM; catches: legacy limit 2 always used under the service |

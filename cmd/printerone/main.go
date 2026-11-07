@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/xtieume/PrinterOne/internal/core/cli"
+	"github.com/xtieume/PrinterOne/internal/core/service"
 	"github.com/xtieume/PrinterOne/internal/core/spool"
 )
 
@@ -16,6 +17,6 @@ func main() {
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt)
 	env := cli.Env{Edition: "main", ExeDir: filepath.Dir(exe), Getenv: os.Getenv,
-		Spool: spool.System(), Stdout: os.Stdout, Stderr: os.Stderr, Interrupt: sig}
+		Spool: spool.System(), ExePath: exe, Service: service.System(), Stdout: os.Stdout, Stderr: os.Stderr, Interrupt: sig}
 	os.Exit(cli.Run(os.Args[1:], env))
 }

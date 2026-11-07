@@ -380,3 +380,65 @@ func TestREQ_LOG_001_WindowsFailedLineFromRealSpooler(t *testing.T) {
 	}
 	t.Fatalf("no `failed:` line within 10 s; stdout %q", s.stdout.String())
 }
+
+// TC-SVC-039, TC-SVC-021
+func TestREQ_SVC_017_WindowsServiceInstallPrintUninstall(t *testing.T) {
+	port := freePort(t)
+	cfg := writeConfig(t, port)
+	defer os.Remove(cfg)
+	defer exec.Command(exe, "service", "uninstall").Run() // never leave the service or the rule behind
+
+	out, err := exec.Command(exe, "service", "install", "--config", cfg).CombinedOutput()
+	if code := exitCode(err); code != 0 || !strings.Contains(string(out), "service PrinterOne installed and running") {
+		t.Fatalf("install: exit %d, output %q; want 0 and the success line", code, out)
+	}
+	if q, _ := exec.Command("sc", "query", "PrinterOne").CombinedOutput(); !strings.Contains(string(q), "RUNNING") {
+		t.Fatalf("sc query after install: %s; want RUNNING", q)
+	}
+
+	os.Remove(outFile)
+	job := []byte("PrinterOne service e2e\r\n\f")
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 5*time.Second)
+	if err != nil {
+		t.Fatalf("service not accepting on %d: %v", port, err)
+	}
+	conn.Write(job)
+	conn.Close()
+	var got []byte
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
+		if got, err = ioutil.ReadFile(outFile); err == nil && len(got) >= len(job) {
+			break
+		}
+	}
+	if !bytes.Equal(got, job) {
+		t.Fatalf("output file %q, want %q\nspooler %s", got, job, spoolerState())
+	}
+
+	logPath := filepath.Join(os.Getenv("ProgramData"), "PrinterOne", "logs", "printerone.log")
+	wantLine := fmt.Sprintf(`%dB "%s" printed`, len(job), printerName)
+	var log []byte
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		if log, _ = ioutil.ReadFile(logPath); strings.Contains(string(log), wantLine) {
+			break
+		}
+	}
+	if !strings.Contains(string(log), wantLine) {
+		t.Fatalf("%s: %q; want a line with %q", logPath, log, wantLine)
+	}
+
+	out, err = exec.Command(exe, "service", "uninstall").CombinedOutput()
+	if code := exitCode(err); code != 0 || !strings.Contains(string(out), "service PrinterOne removed") {
+		t.Fatalf("uninstall: exit %d, output %q; want 0 and the success line", code, out)
+	}
+	if q, err := exec.Command("sc", "query", "PrinterOne").CombinedOutput(); err == nil {
+		t.Fatalf("sc query after uninstall succeeded: %s; want the service gone", q)
+	}
+	if r, err := exec.Command("netsh", "advfirewall", "firewall", "show", "rule", "name=PrinterOne").CombinedOutput(); err == nil {
+		t.Fatalf("firewall rule still present after uninstall: %s", r)
+	}
+	for _, p := range []string{cfg, logPath} { // TC-SVC-021: config and logs are kept
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s gone after uninstall: %v", p, err)
+		}
+	}
+}
