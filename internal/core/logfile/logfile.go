@@ -36,6 +36,9 @@ var locks = make(map[string]*sync.Mutex)
 var datesMu sync.Mutex
 var dates = make(map[string]time.Time)
 
+// testHookAfterOpen runs between opening printerone.log and writing the line (tests only).
+var testHookAfterOpen func()
+
 func pathLock(path string) *sync.Mutex {
 	locksMu.Lock()
 	defer locksMu.Unlock()
@@ -66,17 +69,22 @@ func (w *Writer) Write(p []byte) (int, error) {
 		w.warn(path, err) // no folder means the line cannot be appended: a real write failure
 		return len(p), nil
 	}
-	// Rotation is serialized between processes; ordinary O_APPEND line writes remain lock-free.
-	now := time.Time{}
+	// Every append holds the cross-process lock with the rotation, so a rename or copy+remove never races a
+	// writer that already opened printerone.log (a lost line on POSIX, a failed rename on Windows).
+	// ponytail: one lock file per line; fine for log rates, a long-held handle if lines get hot.
+	m := pathLock(path)
+	m.Lock()
+	defer m.Unlock()
+	now := w.now()
 	if lock, ok := acquireRotationLock(path); ok {
-		now = w.now()
+		defer os.Remove(lock)
 		w.rotate(path, now)
-		_ = os.Remove(lock)
-	} else {
-		now = w.now()
-	}
+	} // lock not acquired (stale or stuck): append anyway, no rotation; a line is never dropped
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err == nil {
+		if testHookAfterOpen != nil {
+			testHookAfterOpen()
+		}
 		_, err = f.Write(p)
 		if ce := f.Close(); err == nil {
 			err = ce

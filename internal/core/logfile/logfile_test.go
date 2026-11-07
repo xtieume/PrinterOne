@@ -577,3 +577,33 @@ func TestREQ_LOGF_007_TwoIndependentWritersCoordinateRotation(t *testing.T) {
 		}
 	}
 }
+
+// TC-LOGF-061: writer A rotates while writer B holds printerone.log open between open and write.
+// The far-future clock makes the fresh file's real mtime look like an older day, as in the Go 1.10 CI failure.
+func TestREQ_LOGF_007_RotationNeverRacesAnOpenAppend(t *testing.T) {
+	dir := tempDir(t)
+	defer os.RemoveAll(dir)
+	c := &clock{t: at(2099, 11, 7, 23, 0, 0)}
+	a := &Writer{Dir: dir, Now: c.now}
+	b := &Writer{Dir: dir, Now: c.now}
+	mustWrite(t, a, "a1\n")
+	mustWrite(t, b, "b1\n")
+	c.set(at(2099, 11, 8, 0, 1, 0))
+	done := make(chan struct{})
+	testHookAfterOpen = func() {
+		testHookAfterOpen = nil
+		go func() { a.Write([]byte("a2\n")); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	defer func() { testHookAfterOpen = nil }()
+	mustWrite(t, b, "b2\n")
+	<-done
+	rot := readOrEmpty(filepath.Join(dir, "printerone-2099-11-07.log"))
+	cur := readOrEmpty(filepath.Join(dir, FileName))
+	if rot != "a1\nb1\n" || !(cur == "a2\nb2\n" || cur == "b2\na2\n") {
+		t.Fatalf("files %v, rotated %q, current %q; want a1 b1 rotated and a2 b2 current", names(t, dir), rot, cur)
+	}
+}

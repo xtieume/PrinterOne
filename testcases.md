@@ -254,6 +254,7 @@ carries the REQ id in its name. Rows are added by skill `testcase` inside a feat
 | TC-LOGF-058 | REQ-LOGF-007 | `TestREQ_LOGF_007_FailedRotationRetriedOnLaterWrite` | review finding, 2026-11-07 |
 | TC-LOGF-059 | REQ-LOGF-007 | `TestREQ_LOGF_007_TwoIndependentWritersCoordinateRotation` | review finding, 2026-11-07 |
 | TC-LOGF-060 | REQ-LOGF-004 | `TestREQ_LOGF_004_FileGetsLineWhenStdoutFails` | review finding, 2026-11-07 |
+| TC-LOGF-061 | REQ-LOGF-007 | `TestREQ_LOGF_007_RotationNeverRacesAnOpenAppend` | Go 1.10 CI race, 2026-11-07 |
 | TC-MULTI-001 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-001` | Two printers load in order |
 | TC-MULTI-002 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-002` | 32 printers load |
 | TC-MULTI-003 | REQ-MULTI-001 | `TestREQ_MULTI_001_PrinterCount/TC-MULTI-003` | 33 printers exit 2 naming `printers` |
