@@ -58,7 +58,20 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	outFile = filepath.Join(dir, "out.prn")
+	// The spooler writes a local file port as SYSTEM and puts the printer in Error for a path under the user's
+	// temp folder (seen on windows-latest: job stuck, file never created), so the port file lives in its own
+	// folder at the drive root that every account may write.
+	outDir := `C:\printerone-e2e`
+	os.RemoveAll(outDir)
+	if err := os.MkdirAll(outDir, 0777); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if out, err := exec.Command("icacls", outDir, "/grant", "*S-1-1-0:(OI)(CI)F").CombinedOutput(); err != nil {
+		fmt.Fprintln(os.Stderr, "icacls:", err, string(out))
+		os.Exit(1)
+	}
+	outFile = filepath.Join(outDir, "out.prn")
 	exe = filepath.Join(dir, "printerone.exe")
 	legacyExe = filepath.Join(dir, "printerone-legacy.exe")
 	code := 1
@@ -70,6 +83,7 @@ func TestMain(m *testing.M) {
 	powershell("Remove-Printer -Name " + psQuote(printerName))
 	powershell("Remove-PrinterPort -Name " + psQuote(outFile))
 	os.RemoveAll(dir)
+	os.RemoveAll(outDir)
 	os.Exit(code)
 }
 
