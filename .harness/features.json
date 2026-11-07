@@ -93,6 +93,45 @@
       "dependencies": [
         "F-001@1"
       ]
+    },
+    {
+      "id": "F-002",
+      "revision": 1,
+      "behavior": "One central log folder, shared printerone.log readable while running, daily rotation and clean-up, `logs` command",
+      "spec": "docs/specs/2026-11-07-f002-logs.md",
+      "acceptance": [
+        "REQ-LOGF-001",
+        "REQ-LOGF-002",
+        "REQ-LOGF-003",
+        "REQ-LOGF-004",
+        "REQ-LOGF-005",
+        "REQ-LOGF-006",
+        "REQ-LOGF-007",
+        "REQ-LOGF-008",
+        "REQ-LOGF-009",
+        "REQ-LOGF-010",
+        "REQ-LOGF-011",
+        "REQ-LOGF-012"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110"
+      ],
+      "risk": "medium",
+      "issues": [
+        3
+      ],
+      "dependencies": [
+        "F-001@1",
+        "F-008@1"
+      ]
     }
   ]
 }
