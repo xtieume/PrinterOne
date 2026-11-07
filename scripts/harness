@@ -323,6 +323,9 @@ def classify(kind, code, output, c, started):
         if failed:
             return FAIL, f'{len(failed)} failed: {", ".join(failed[:5])}'
         if code != 0:
+            if c.get('build_error_fails'):
+                # core-go110: code that does not build under the old toolchain is the defect this check exists for
+                return FAIL, f'go exit {code} without a failing test: does not build or vet under this toolchain'
             return ERROR, f'go exit {code} without a failing test (build error, vet, panic or setup)'
         passed = len({(e.get('Package'), e['Test']) for e in done})
         return (PASS, f'{passed} tests') if passed else (ERROR, 'no tests ran')

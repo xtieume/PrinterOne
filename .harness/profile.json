@@ -94,7 +94,8 @@
         "{tests}"
       ],
       "tests_filter": "^[A-Za-z0-9_]+$",
-      "timeout": 1200
+      "timeout": 1200,
+      "build_error_fails": true
     },
     "harness-selftest": {
       "argv": [
