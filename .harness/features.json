@@ -28,6 +28,11 @@
         "REQ-CLI-003",
         "REQ-LOG-001",
         "REQ-E2E-001",
+        "REQ-RECV-009",
+        "REQ-CLI-004",
+        "REQ-CLI-005",
+        "REQ-LOG-002",
+        "REQ-LEG-002",
         "REQ-LEG-001"
       ],
       "allowed_paths": [
