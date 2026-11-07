@@ -383,8 +383,36 @@ func TestREQ_LOG_001_WindowsFailedLineFromRealSpooler(t *testing.T) {
 
 // TC-SVC-039, TC-SVC-021
 func TestREQ_SVC_017_WindowsServiceInstallPrintUninstall(t *testing.T) {
+	// The spooler refuses to write a job owned by SYSTEM (the service) to a local *file* port (job "Error,
+	// Printing, Retained" on windows-latest), so this test prints through a Standard TCP/IP port pointing at a
+	// listener of its own — the same path a real network printer takes.
+	capture, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.Close()
+	capPort := capture.Addr().(*net.TCPAddr).Port
+	const tcpPrinter, tcpPort = "PrinterOne E2E TCP", "PrinterOneE2E_TCP"
+	if err := powershell("Add-PrinterPort -Name " + psQuote(tcpPort) + " -PrinterHostAddress '127.0.0.1' -PortNumber " +
+		strconv.Itoa(capPort) + "; Add-Printer -Name " + psQuote(tcpPrinter) +
+		" -DriverName 'Generic / Text Only' -PortName " + psQuote(tcpPort)); err != nil {
+		t.Fatal(err)
+	}
+	defer powershell("Remove-Printer -Name " + psQuote(tcpPrinter) + "; Remove-PrinterPort -Name " + psQuote(tcpPort))
+	captured := make(chan []byte, 1)
+	go func() {
+		c, err := capture.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.SetReadDeadline(time.Now().Add(60 * time.Second))
+		b, _ := ioutil.ReadAll(c)
+		captured <- b
+	}()
+
 	port := freePort(t)
-	cfg := writeConfig(t, port)
+	cfg := writeConfigFor(t, tcpPrinter, port)
 	defer os.Remove(cfg)
 	defer exec.Command(exe, "service", "uninstall").Run() // never leave the service or the rule behind
 
@@ -396,7 +424,6 @@ func TestREQ_SVC_017_WindowsServiceInstallPrintUninstall(t *testing.T) {
 		t.Fatalf("sc query after install: %s; want RUNNING", q)
 	}
 
-	os.Remove(outFile)
 	job := []byte("PrinterOne service e2e\r\n\f")
 	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 5*time.Second)
 	if err != nil {
@@ -405,17 +432,16 @@ func TestREQ_SVC_017_WindowsServiceInstallPrintUninstall(t *testing.T) {
 	conn.Write(job)
 	conn.Close()
 	var got []byte
-	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
-		if got, err = ioutil.ReadFile(outFile); err == nil && len(got) >= len(job) {
-			break
-		}
+	select {
+	case got = <-captured:
+	case <-time.After(60 * time.Second):
 	}
 	if !bytes.Equal(got, job) {
-		t.Fatalf("output file %q, want %q\nspooler %s", got, job, spoolerState())
+		t.Fatalf("bytes at the printer's TCP port %q, want %q\nspooler %s", got, job, spoolerState())
 	}
 
 	logPath := filepath.Join(os.Getenv("ProgramData"), "PrinterOne", "logs", "printerone.log")
-	wantLine := fmt.Sprintf(`%dB "%s" printed`, len(job), printerName)
+	wantLine := fmt.Sprintf(`%dB "%s" printed`, len(job), tcpPrinter)
 	var log []byte
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
 		if log, _ = ioutil.ReadFile(logPath); strings.Contains(string(log), wantLine) {
