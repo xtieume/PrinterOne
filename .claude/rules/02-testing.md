@@ -16,7 +16,8 @@ paths:
 - Tests that touch Windows APIs use a fake behind an interface (spooler, listener) so they run anywhere; the real
   API calls are covered by a Windows check (from F-001) or a MANUAL row.
 - An automated ledger row is only `scripts/harness check <id> [--tests <TestName>]` with `go-test` or
-  `core-go110`. `go-vet` and `win-build` are `exit` checks and never go in a ledger. Never a `grep` on source as
+  `core-go110`. `windows-e2e` runs only on the CI Windows runner, so its rows are `MANUAL:admin`, signed with the
+  URL of the green CI run. `go-vet` and `win-build` are `exit` checks and never go in a ledger. Never a `grep` on source as
   a check.
 - `MANUAL:admin` only for what needs a person: running on an XP/Win7 VM, printing on a real printer, looking at
   the UI in IE6/IE8 and in a modern browser.
