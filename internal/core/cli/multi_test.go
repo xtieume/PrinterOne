@@ -326,7 +326,8 @@ func TestREQ_MULTI_010_CtrlCDropsReceivingOnEveryPort(t *testing.T) {
 	defer c1.Close()
 	c2 := sendPort(t, ports[1], "x")
 	defer c2.Close()
-	time.Sleep(200 * time.Millisecond)
+	// With a shared pool a client can wait in the backlog for a few AcceptWait rounds before it is accepted.
+	time.Sleep(4*receiver.AcceptWait + 200*time.Millisecond)
 	r.stop()
 	lines := r.connLines()
 	a, b := 0, 0
@@ -527,7 +528,8 @@ func TestREQ_MULTI_008_MainSlotsSharedAcrossPorts(t *testing.T) {
 			c.Close()
 		}
 	}()
-	time.Sleep(200 * time.Millisecond)
+	// With a shared pool a client can wait in the backlog for a few AcceptWait rounds before it is accepted.
+	time.Sleep(4*receiver.AcceptWait + 200*time.Millisecond)
 	sendPort(t, ports[1], "ninth").Close()
 	time.Sleep(500 * time.Millisecond)
 	if got := docsOn(r.sp.done(), "B"); len(got) != 0 {
