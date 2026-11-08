@@ -15,11 +15,12 @@ on:
         default: 'v0.0.0-dev'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    if: github.repository == 'xtieume/PrinterOne' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: [self-hosted, printerone-mac]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +35,19 @@ jobs:
           name: PrinterOne-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
           path: dist/
           if-no-files-found: error
+  publish:
+    needs: build
+    if: github.repository == 'xtieume/PrinterOne' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, printerone-mac]
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PrinterOne-${{ github.ref_name }}
+          path: dist/
       - name: Publish the release
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" dist/* --title "PrinterOne ${{ github.ref_name }}" --generate-notes --draft

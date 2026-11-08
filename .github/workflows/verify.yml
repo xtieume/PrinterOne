@@ -21,7 +21,8 @@ concurrency:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    if: github.repository == 'xtieume/PrinterOne' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: [self-hosted, printerone-mac]
     timeout-minutes: 10
     outputs:
       checks: ${{ steps.plan.outputs.checks }}
@@ -40,6 +41,7 @@ jobs:
         name: Affected checks
         env:
           BEFORE: ${{ github.event.before }}
+          WINDOWS_E2E: ${{ vars.WINDOWS_E2E }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = pull_request ]; then
@@ -50,24 +52,27 @@ jobs:
             base=HEAD~1
           fi
           checks=$(git diff --name-only --no-renames "$base...HEAD" | python3 -c '
-          import fnmatch, json, sys
+          import fnmatch, json, os, sys
           p = json.load(open(".harness/profile.json"))
           files = [l.strip() for l in sys.stdin if l.strip()]
           # same matching as scripts/harness matches(); checks that need --tests run only from ledger rows
           hit = {c for c, d in p["checks"].items() if not d.get("tests_required")
                  and any(fnmatch.fnmatchcase(f, g) for f in files for g in d.get("paths", []))}
+          if "WINDOWS_E2E" in os.environ and os.environ.get("WINDOWS_E2E") != "on":
+              hit.discard("windows-e2e")
           print(json.dumps(sorted(hit | set(p.get("always_checks", [])))))')
           echo "checks=$checks" >> "$GITHUB_OUTPUT"
           echo "checks: $checks"
 
   check:
     needs: plan
-    if: needs.plan.outputs.checks != '[]'
-    # windows-e2e needs a real spooler; everything else runs on Linux
-    runs-on: ${{ matrix.check == 'windows-e2e' && 'windows-latest' || 'ubuntu-latest' }}
+    if: github.repository == 'xtieume/PrinterOne' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.checks != '[]'
+    # windows-e2e needs a real spooler and runs only when WINDOWS_E2E=on.
+    runs-on: ${{ matrix.check == 'windows-e2e' && 'windows-latest' || fromJSON('["self-hosted", "printerone-mac"]') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         check: ${{ fromJson(needs.plan.outputs.checks) }}
     steps:
@@ -93,8 +98,8 @@ jobs:
 
   verify:
     needs: [plan, check]
-    if: always()
-    runs-on: ubuntu-latest
+    if: always() && github.repository == 'xtieume/PrinterOne' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: [self-hosted, printerone-mac]
     steps:
       - name: All harness gates
         env:

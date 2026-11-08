@@ -149,7 +149,7 @@
       ],
       "tests_filter": "^[A-Za-z0-9_]+$",
       "timeout": 900,
-      "note": "Runs on windows-latest in verify.yml; on other OSes it finds no test and is ERROR."
+      "note": "Runs on windows-latest only when repository variable WINDOWS_E2E is on; otherwise omitted from the plan."
     },
     "release-build": {
       "argv": [
