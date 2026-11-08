@@ -1,3 +1,291 @@
 {
-  "features": []
+  "features": [
+    {
+      "id": "F-001",
+      "revision": 1,
+      "behavior": "One printer: RAW jobs over TCP printed through winspool from the console (serve), both editions",
+      "spec": "docs/specs/2026-11-07-f001-core.md",
+      "acceptance": [
+        "REQ-CFG-001",
+        "REQ-CFG-002",
+        "REQ-CFG-003",
+        "REQ-CFG-004",
+        "REQ-CFG-005",
+        "REQ-CFG-006",
+        "REQ-RECV-001",
+        "REQ-RECV-002",
+        "REQ-RECV-003",
+        "REQ-RECV-004",
+        "REQ-RECV-005",
+        "REQ-RECV-006",
+        "REQ-RECV-007",
+        "REQ-RECV-010",
+        "REQ-RECV-008",
+        "REQ-SPOOL-001",
+        "REQ-SPOOL-002",
+        "REQ-SPOOL-003",
+        "REQ-CLI-001",
+        "REQ-CLI-002",
+        "REQ-CLI-003",
+        "REQ-LOG-001",
+        "REQ-E2E-001",
+        "REQ-RECV-009",
+        "REQ-CLI-004",
+        "REQ-CLI-005",
+        "REQ-LOG-002",
+        "REQ-LEG-002"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110",
+        "windows-e2e"
+      ],
+      "risk": "high",
+      "issues": [],
+      "dependencies": []
+    },
+    {
+      "id": "F-008",
+      "revision": 1,
+      "behavior": "Windows service install/uninstall/run with its log file, firewall rule added and removed with it",
+      "spec": "docs/specs/2026-11-07-f008-service.md",
+      "acceptance": [
+        "REQ-SVC-001",
+        "REQ-SVC-002",
+        "REQ-SVC-003",
+        "REQ-SVC-004",
+        "REQ-SVC-005",
+        "REQ-SVC-006",
+        "REQ-SVC-007",
+        "REQ-SVC-008",
+        "REQ-SVC-009",
+        "REQ-SVC-010",
+        "REQ-SVC-011",
+        "REQ-SVC-012",
+        "REQ-SVC-013",
+        "REQ-SVC-014",
+        "REQ-SVC-015",
+        "REQ-SVC-016",
+        "REQ-SVC-017",
+        "REQ-SVC-018"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110",
+        "windows-e2e"
+      ],
+      "risk": "high",
+      "issues": [],
+      "dependencies": [
+        "F-001@1"
+      ]
+    },
+    {
+      "id": "F-002",
+      "revision": 1,
+      "behavior": "One central log folder, shared printerone.log readable while running, daily rotation and clean-up, `logs` command",
+      "spec": "docs/specs/2026-11-07-f002-logs.md",
+      "acceptance": [
+        "REQ-LOGF-001",
+        "REQ-LOGF-002",
+        "REQ-LOGF-003",
+        "REQ-LOGF-004",
+        "REQ-LOGF-005",
+        "REQ-LOGF-006",
+        "REQ-LOGF-007",
+        "REQ-LOGF-008",
+        "REQ-LOGF-009",
+        "REQ-LOGF-010",
+        "REQ-LOGF-011",
+        "REQ-LOGF-012"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110"
+      ],
+      "risk": "medium",
+      "issues": [
+        3
+      ],
+      "dependencies": [
+        "F-001@1",
+        "F-008@1"
+      ]
+    },
+    {
+      "id": "F-003",
+      "revision": 1,
+      "behavior": "Several printers in one server, one TCP port each, shared limits, firewall opens every port",
+      "spec": "docs/specs/2026-11-07-f003-multi-printer.md",
+      "acceptance": [
+        "REQ-MULTI-001",
+        "REQ-MULTI-002",
+        "REQ-MULTI-003",
+        "REQ-MULTI-004",
+        "REQ-MULTI-005",
+        "REQ-MULTI-006",
+        "REQ-MULTI-007",
+        "REQ-MULTI-008",
+        "REQ-MULTI-009",
+        "REQ-MULTI-010",
+        "REQ-MULTI-011",
+        "REQ-MULTI-012"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110"
+      ],
+      "risk": "medium",
+      "issues": [
+        1,
+        6
+      ],
+      "dependencies": [
+        "F-001@1",
+        "F-008@1"
+      ]
+    },
+    {
+      "id": "F-004",
+      "revision": 1,
+      "behavior": "Per-printer IP/CIDR allowlist; other clients closed unread and logged as rejected",
+      "spec": "docs/specs/2026-11-07-f004-allowlist.md",
+      "acceptance": [
+        "REQ-ALLOW-001",
+        "REQ-ALLOW-002",
+        "REQ-ALLOW-003",
+        "REQ-ALLOW-004",
+        "REQ-ALLOW-005",
+        "REQ-ALLOW-006",
+        "REQ-ALLOW-007",
+        "REQ-ALLOW-008",
+        "REQ-ALLOW-009"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110"
+      ],
+      "risk": "high",
+      "issues": [
+        2
+      ],
+      "dependencies": [
+        "F-003@1"
+      ]
+    },
+    {
+      "id": "F-005",
+      "revision": 1,
+      "behavior": "Web UI and JSON API served by PrinterOne, same functions without JS (IE6) and with JS, two looks",
+      "spec": "docs/specs/2026-11-07-f005-web-ui.md",
+      "acceptance": [
+        "REQ-UI-001",
+        "REQ-UI-002",
+        "REQ-UI-003",
+        "REQ-UI-004",
+        "REQ-UI-005",
+        "REQ-UI-006",
+        "REQ-UI-007",
+        "REQ-UI-008",
+        "REQ-UI-009",
+        "REQ-UI-010",
+        "REQ-UI-011",
+        "REQ-UI-012",
+        "REQ-UI-013",
+        "REQ-UI-014",
+        "REQ-UI-015",
+        "REQ-UI-016",
+        "REQ-UI-017",
+        "REQ-UI-018",
+        "REQ-UI-019",
+        "REQ-UI-021",
+        "REQ-UI-022",
+        "REQ-UI-020"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "static/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "go-vet",
+        "win-build",
+        "core-go110",
+        "windows-e2e"
+      ],
+      "risk": "high",
+      "issues": [],
+      "dependencies": [
+        "F-002@1",
+        "F-004@1",
+        "F-008@1"
+      ]
+    },
+    {
+      "id": "F-006",
+      "revision": 1,
+      "behavior": "Legacy executable for Windows XP to 8 with the full feature set",
+      "spec": "docs/specs/2026-11-07-f006-legacy.md",
+      "acceptance": [
+        "REQ-LEGACY-001",
+        "REQ-LEGACY-002",
+        "REQ-LEGACY-003",
+        "REQ-LEGACY-004",
+        "REQ-LEGACY-005"
+      ],
+      "allowed_paths": [
+        "cmd/*",
+        "internal/*",
+        "testcases.md"
+      ],
+      "required_checks": [
+        "go-test",
+        "core-go110"
+      ],
+      "risk": "medium",
+      "issues": [
+        7
+      ],
+      "dependencies": [
+        "F-005@1"
+      ]
+    }
+  ]
 }

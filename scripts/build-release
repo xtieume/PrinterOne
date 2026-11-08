@@ -1,0 +1,27 @@
+#!/bin/sh
+# Build the three release executables into dist/:
+#   PrinterOne-<version>-windows-x64.exe     main edition, Go stable, Windows 10/11 64-bit
+#   PrinterOne-<version>-windows-x86.exe     main edition, Go stable, Windows 10/11 32-bit
+#   PrinterOne-<version>-legacy-x86.exe      legacy edition, Go 1.10.8 (Docker), Windows XP SP3 to 8
+# plus SHA256SUMS. Usage: scripts/build-release <version>   (e.g. v2.0.0)
+set -eu
+version=${1:?usage: scripts/build-release <version>}
+root=$(cd "$(dirname "$0")/.." && pwd)
+pkg=github.com/xtieume/PrinterOne
+ldflags="-s -w -X $pkg/internal/core/buildinfo.Version=$version"
+out="$root/dist"
+rm -rf "$out" && mkdir -p "$out"
+cd "$root"
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$ldflags" -o "$out/PrinterOne-$version-windows-x64.exe" ./cmd/printerone
+CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -trimpath -ldflags "$ldflags" -o "$out/PrinterOne-$version-windows-x86.exe" ./cmd/printerone
+# Go 1.10 has no modules and no -trimpath: build from a GOPATH copy inside the official image.
+docker run --rm --platform linux/amd64 -v "$root:/src:ro" -v "$out:/out" -e CGO_ENABLED=0 golang:1.10.8 sh -euc '
+  dst=/go/src/'"$pkg"'
+  mkdir -p "$dst"
+  cd /src && tar --exclude=./.git --exclude=./.testcases --exclude=./dist -cf - . | tar -xf - -C "$dst"
+  cd "$dst"
+  GOOS=windows GOARCH=386 go build -ldflags "'"$ldflags"'" -o /out/PrinterOne-'"$version"'-legacy-x86.exe ./cmd/printerone-legacy
+'
+cd "$out"
+if command -v sha256sum >/dev/null 2>&1; then sha256sum ./*.exe > SHA256SUMS; else shasum -a 256 ./*.exe > SHA256SUMS; fi
+ls -l "$out"

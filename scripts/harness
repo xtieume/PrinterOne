@@ -41,7 +41,10 @@ EXEMPT_RE = re.compile(r'^Spec-Exempt:\s*(\S.*)$', re.M)
 # Env passed to checks; everything else (tokens, keys) stays out of the child.
 ENV_KEEP = ('PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM',
             'GOROOT', 'GOPATH', 'GOCACHE', 'GOMODCACHE', 'GOFLAGS', 'GOPROXY', 'GOTOOLCHAIN', 'DOCKER_HOST',
-            'CI', 'GITHUB_ACTIONS', 'RUNNER_TEMP', 'PYTHONPYCACHEPREFIX', 'PYTHONDONTWRITEBYTECODE', 'GOALRUN')
+            'CI', 'GITHUB_ACTIONS', 'RUNNER_TEMP', 'PYTHONPYCACHEPREFIX', 'PYTHONDONTWRITEBYTECODE', 'GOALRUN',
+            # Windows runners (windows-e2e): without these Go and the spooler cannot start
+            'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE',
+            'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'USERNAME')
 SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|AUTH', re.I)
 SECRET_TEXT = re.compile(r'(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9-]{20,})')
 RECEIPT_FIELDS = ('receipt_id', 'feature', 'revision', 'run_id', 'spec', 'spec_sha256', 'reqs', 'base_sha',
@@ -320,6 +323,11 @@ def classify(kind, code, output, c, started):
         if failed:
             return FAIL, f'{len(failed)} failed: {", ".join(failed[:5])}'
         if code != 0:
+            if code == 125:  # `docker run` could not start the toolchain container: infrastructure, not the code
+                return ERROR, 'toolchain container did not start (docker exit 125)'
+            if c.get('build_error_fails'):
+                # core-go110: code that does not build under the old toolchain is the defect this check exists for
+                return FAIL, f'go exit {code} without a failing test: does not build or vet under this toolchain'
             return ERROR, f'go exit {code} without a failing test (build error, vet, panic or setup)'
         passed = len({(e.get('Package'), e['Test']) for e in done})
         return (PASS, f'{passed} tests') if passed else (ERROR, 'no tests ran')
@@ -375,8 +383,11 @@ def cmd_check(a):
             def kill():
                 timed_out.append(True)
                 try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                    if hasattr(os, 'killpg'):
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    else:  # Windows: no process groups here; kill the direct child
+                        proc.kill()
+                except (ProcessLookupError, OSError):
                     pass
             timer = threading.Timer(timeout, kill)
             timer.start()

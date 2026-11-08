@@ -3,308 +3,132 @@
 [![GitHub stars](https://img.shields.io/github/stars/xtieume/PrinterOne?style=flat-square)](https://github.com/xtieume/PrinterOne/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/xtieume/PrinterOne?style=flat-square)](https://github.com/xtieume/PrinterOne/network)
 [![GitHub issues](https://img.shields.io/github/issues/xtieume/PrinterOne?style=flat-square)](https://github.com/xtieume/PrinterOne/issues)
-[![GitHub license](https://img.shields.io/github/license/xtieume/PrinterOne?style=flat-square)](https://github.com/xtieume/PrinterOne/blob/master/LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/xtieume/PrinterOne?style=flat-square)](https://github.com/xtieume/PrinterOne/releases)
 
-A comprehensive TCP network print server with integrated GUI management and system tray support for Windows.
+Share printers installed on a Windows PC over the network: PrinterOne listens on a TCP port (9100 by default) and
+hands every job it receives, unchanged, to the Windows spooler as a RAW print job — like the "JetDirect / port 9100"
+interface of a network printer.
 
-> ⚠️ **Quick Fix**: If server starts but clients can't connect, check if port 9100 is blocked by firewall. Consider using [SimpleWall](https://github.com/henrypp/simplewall) for easy firewall management.
+Version 2 is a rewrite in Go: one small `.exe`, nothing to install, managed from a web page.
 
-**Copyright (c) 2025 xtieume@gmail.com**  
-**GitHub: https://github.com/xtieume/PrinterOne**
+## Features
 
-> 🚧 **v2 in progress**: `master` is being rewritten in Go — one `.exe` with no runtime, a main edition for
-> Windows 10/11 and a legacy edition for Windows XP–8, several printers per server, an IP allowlist, central logs
-> and a web UI. Plan: [docs/specs/2026-11-07-go-rewrite-plan.md](docs/specs/2026-11-07-go-rewrite-plan.md).
-> Until v2 ships, use the [v1.0.1 release](https://github.com/xtieume/PrinterOne/releases/tag/v1.0.1); everything
-> below describes v1. Windows XP users can meanwhile try the community Go fork
-> [ashtray01/printerone](https://github.com/ashtray01/printerone).
+- **Several printers in one server**, each on its own port (issues #1, #6).
+- **Runs as a Windows service** — starts with the PC, no login needed; the firewall rule is added and removed for you.
+- **Web UI** at `http://127.0.0.1:9180/` to add printers, send a test page and watch the live log. Every page also
+  works in Internet Explorer 6 without JavaScript; newer browsers get a nicer look.
+- **Per-printer IP allowlist** (addresses and CIDR blocks, IPv4/IPv6) (issue #2).
+- **One central log** in `%ProgramData%\PrinterOne\logs`, readable while PrinterOne runs, rotated daily (issue #3).
+- **Windows XP to Windows 11**: a legacy build for XP SP3, Vista, 7 and 8 (issue #7) and a main build for 10/11.
+- Safe limits: 256 MB per job, 60 s idle timeout, a bounded number of jobs in memory.
 
-![PrinterOne Screenshot](assets/screenshot.png)
+## Download
 
-## ✨ Features
+From [Releases](https://github.com/xtieume/PrinterOne/releases):
 
-- 🖨️ **TCP Network Print Server** - Receives raw print data over TCP and sends to local printer
-- 🖥️ **Modern GUI Interface** - Easy-to-use graphical interface with tabbed layout
-- 🔧 **System Tray Integration** - Minimize to tray and control from system tray menu
-- 🚀 **Windows Auto-Start** - Add to Windows startup for automatic server launch
-- 🧪 **Built-in Test Client** - Test connections and send sample print jobs
-- 📊 **Real-time Logging** - Comprehensive logging with emoji indicators for easy reading
-- ⚙️ **Configuration Management** - Persistent settings stored in JSON format
-- 🔥 **Port Management** - Automatic port conflict resolution
-- 🌐 **Network Discovery** - Shows local IP addresses for easy client configuration
+| File | For |
+|---|---|
+| `PrinterOne-<version>-windows-x64.exe` | Windows 10 / 11, 64-bit |
+| `PrinterOne-<version>-windows-x86.exe` | Windows 10 / 11, 32-bit |
+| `PrinterOne-<version>-legacy-x86.exe` | Windows XP SP3, Vista, 7, 8 |
 
-## 🎯 Use Cases
+`SHA256SUMS` lists the checksums. Version 1 (Python) is still available as
+[v1.0.1](https://github.com/xtieume/PrinterOne/releases/tag/v1.0.1); v2 does not read the v1 `config.json`.
 
-- **Network Printing**: Share local printers over TCP network
-- **Raw Data Printing**: Print raw data from applications, scripts, or devices
-- **Legacy System Integration**: Bridge old systems to modern printers
-- **Print Server**: Centralized printing solution for small networks
+## Quick start
 
-## 📋 Requirements
+1. Put the `.exe` in a folder of its own (for example `C:\PrinterOne\printerone.exe`).
+2. Double-click it. Your browser opens the PrinterOne page; add a printer (choose the Windows printer and a port).
+3. To keep it running after reboots, open a Command Prompt **as administrator** and run:
 
-- Windows 10/11
-- Python 3.9+ (for development)
-- Local printer installed
+   ```bat
+   C:\PrinterOne\printerone.exe service install
+   ```
 
-## 🚀 Quick Start
+4. Set up the client computers: see **[docs/client-setup.md](docs/client-setup.md)** (Windows, macOS, Linux, scripts).
+   The client needs the printer's own driver — PrinterOne does not convert print data.
 
-### Option 1: Download Pre-built Executable (Recommended)
-1. Download the latest `PrinterOne.exe` from [Releases](https://github.com/xtieume/PrinterOne/releases)
-2. Run `PrinterOne.exe gui`
-3. Select your printer and configure settings
-4. Click "Start Server"
-5. ⚠️ **Important**: If clients can't connect, check firewall settings (see [Troubleshooting](#troubleshooting))
+## Commands
 
-### Option 2: Build v1 from Source
-The Python v1 source lives at tag `v1.0.1`; `master` now holds the Go rewrite (see above).
-```bash
-# Clone the repository at the v1 tag
-git clone --branch v1.0.1 https://github.com/xtieume/PrinterOne.git
-cd PrinterOne
+| Command | Does |
+|---|---|
+| `printerone` | serve and open the web UI in the browser |
+| `printerone serve [--config file]` | run in this console (Ctrl+C stops after printing jobs already received) |
+| `printerone printers` | list the printers installed on this PC |
+| `printerone logs` | print the path of the log file |
+| `printerone service install [--config file]` | install and start the Windows service, open the firewall (admin) |
+| `printerone service uninstall` | stop and remove the service and the firewall rule (admin); config and logs stay |
+| `printerone version` | print the version |
 
-# Install dependencies
-pip install -r requirements.txt
+## Configuration
 
-# Build executable
-python build.py
-
-# Run the executable
-dist/PrinterOne.exe gui
-```
-
-### ⚠️ Network Connectivity Requirements
-
-For network printing to work properly:
-- **Port 9100** must be accessible on your network
-- **Firewall** should allow PrinterOne.exe 
-- Some minimal Windows builds may require manual firewall configuration
-- Consider using [SimpleWall](https://github.com/henrypp/simplewall) for easy firewall management
-
-## 🖥️ Usage Modes
-
-### GUI Mode (Recommended)
-```bash
-PrinterOne.exe gui
-```
-- Full graphical interface
-- System tray integration
-- Real-time logging
-- Built-in test client
-
-### Console Mode
-```bash
-PrinterOne.exe
-```
-- Command-line interface
-- Suitable for servers or automated deployments
-
-### Test Client Mode
-```bash
-PrinterOne.exe test
-```
-- Interactive connection testing
-- Send test print jobs
-
-## ⚙️ Configuration
-
-The application uses `config.json` for persistent settings:
+`config.json` is read from `--config`, else next to the exe, else `%ProgramData%\PrinterOne\config.json`
+(`%ALLUSERSPROFILE%\Application Data\PrinterOne` on XP). The web UI writes it for you; by hand it looks like:
 
 ```json
 {
-    "printer_name": "Canon MF220 Series",
-    "port": 9100,
-    "auto_start": false,
-    "service_name": "PrinterOne",
-    "service_description": "PrinterOne - Network print server for raw print data",
-    "manual": true,
-    "minimize_to_tray": true
+  "version": 2,
+  "printers": [
+    {"name": "receipts", "printer": "EPSON TM-T82", "port": 9100},
+    {"name": "labels", "printer": "Zebra ZD420", "port": 9101, "allow": ["192.168.1.0/24", "10.0.0.5"]}
+  ],
+  "log": {"dir": "D:\\PrinterOneLogs", "keep_days": 30},
+  "ui": {"port": 9180, "remote": false, "password": ""}
 }
 ```
 
-### Configuration Options
+| Key | Meaning |
+|---|---|
+| `printers[].printer` | Windows printer name, as `printerone printers` shows it |
+| `printers[].port` | TCP port for this printer (1–65535, one per printer); default 9100 |
+| `printers[].name` | short name shown in logs and the UI |
+| `printers[].allow` | optional list of client addresses / CIDR blocks; missing = everyone |
+| `log.dir`, `log.keep_days` | log folder (default `<data dir>\logs`) and days of rotated logs to keep (default 30) |
+| `ui.port` | web UI port (default 9180) |
+| `ui.remote`, `ui.password` | allow the web UI from other PCs (HTTP Basic, user `admin`, password of 8+ characters) |
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `printer_name` | string | Target printer name (from Windows printer list) |
-| `port` | integer | TCP port to listen on (default: 9100) |
-| `auto_start` | boolean | Start server automatically |
-| `minimize_to_tray` | boolean | Minimize to system tray when closing |
+An invalid config stops PrinterOne with a message naming the file and the field.
 
-## 🌐 Network Usage
+## Logs
 
-Once the server is running, other machines can send print jobs to:
-```
-YOUR_IP_ADDRESS:9100
-```
+One line per connection in `printerone.log`:
 
-Example using netcat:
-```bash
-echo "Hello World" | nc YOUR_IP_ADDRESS 9100
-```
-
-Example using Python:
-```python
-import socket
-
-def send_to_printer(data, host='192.168.1.100', port=9100):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((host, port))
-        s.send(data.encode())
-
-send_to_printer("Test print job")
+```text
+2026-11-07T16:00:00+07:00 192.168.1.5:51234 1024B "EPSON TM-T82" printed
 ```
 
-## � Windows Firewall & Network Security
+Results: `printed`, `empty`, `rejected: not allowed`, `dropped: too large | idle | reset | shutdown`,
+`failed: <windows error code> <message>`. `printerone logs` shows where the file is.
 
-### Firewall Configuration (Important!)
+## Troubleshooting
 
-PrinterOne requires **port 9100** to be accessible for network printing. If clients can't connect after starting the server, follow these steps:
+See the table at the end of [docs/client-setup.md](docs/client-setup.md). The usual causes: the firewall (the
+service opens it; `serve` in a console does not), a wrong driver on the client, or the client's IP missing from an
+allowlist.
 
-#### Method 1: Using SimpleWall (Recommended)
-[SimpleWall](https://github.com/henrypp/simplewall) is a lightweight firewall manager that makes configuration easy:
+## Building from source
 
-1. **Download SimpleWall**: Visit [https://github.com/henrypp/simplewall](https://github.com/henrypp/simplewall)
-2. **Install and run** SimpleWall
-3. **Add PrinterOne.exe** to the allowed applications list
-4. **Enable network access** for PrinterOne
-5. **Allow port 9100** for incoming connections
+Go 1.22 or newer for the main build, Docker for the legacy build (Go 1.10.8):
 
-#### Method 2: Windows Firewall Manual Configuration
-```powershell
-# Run as Administrator
-New-NetFirewallRule -DisplayName "PrinterOne Port 9100" -Direction Inbound -Protocol TCP -LocalPort 9100 -Action Allow
+```sh
+go test ./...
+scripts/build-release v2.0.0-dev   # writes dist/*.exe and SHA256SUMS
 ```
 
-#### Method 3: Windows Firewall GUI
-1. Open **Windows Defender Firewall** with Advanced Security
-2. Click **Inbound Rules** → **New Rule**
-3. Select **Port** → **TCP** → **Specific Local Ports**: `9100`
-4. **Allow the connection** → Apply to all profiles
-5. Name the rule "PrinterOne Port 9100"
+The code shared by both editions lives in `internal/core` and must stay compatible with Go 1.10 (the last Go that runs
+on Windows XP); CI builds and tests it with Go 1.10.8. Contributor notes: `CLAUDE.md`, specs in `docs/specs/`.
 
-### Common Network Issues
+## Credits
 
-- **Minimal Windows builds** (Windows 10/11 LTSC, custom builds) may have restrictive default firewall settings
-- **Corporate networks** may block port 9100 by policy
-- **Antivirus software** may interfere with network connections
-- **Virtual machines** may require additional network configuration
+- [ashtray01/printerone](https://github.com/ashtray01/printerone) showed that a Go build runs well on Windows XP (#7).
+- @DiegoERuiz's PR #5 proposed one port per printer, which v2 adopted.
 
-## �🔧 Advanced Features
+## Contributing
 
-### System Tray Integration
-- Right-click tray icon for quick actions
-- Start/stop server from tray menu
-- Show/hide main window
-- Minimize to tray on close
+Issues and pull requests are welcome. Please describe the behaviour you want in the issue first; changes go through
+a spec in `docs/specs/` and tests.
 
-### Auto-Start Configuration
-- Add to Windows startup registry
-- Auto-start with configured printer
-- Background operation support
+## Support
 
-### Logging System
-- Real-time logging with emoji indicators
-- Automatic log rotation (30-day retention)
-- Separate test client logging
-- File-based logging for debugging
-
-## 🛠️ Development
-
-### Project Structure
-```
-PrinterOne/
-├── server.py          # Main application
-├── build.py           # Build script
-├── requirements.txt   # Python dependencies
-├── config.json        # Configuration file
-├── PrinterOne.spec    # PyInstaller spec
-├── assets/           # Assets folder
-│   └── screenshot.png # Application screenshot
-├── dist/             # Built executables
-└── logs/             # Application logs
-```
-
-### Building
-```bash
-# Install development dependencies
-pip install -r requirements.txt
-
-# Build executable
-python build.py
-
-# Clean build
-python build.py --clean
-```
-
-### Dependencies
-- `pywin32` - Windows API integration
-- `pystray` - System tray support
-- `Pillow` - Image processing
-- `psutil` - Process management
-- `pyinstaller` - Executable packaging
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Q: Server starts but clients can't connect to port 9100**  
-A: ⚠️ **IMPORTANT**: Check if port 9100 is publicly accessible. Some minimal Windows builds may have restrictive firewall settings that block the port.
-
-**Solution**: Install a firewall manager like [SimpleWall](https://github.com/henrypp/simplewall) to properly allow port 9100:
-1. Download and install [SimpleWall](https://github.com/henrypp/simplewall)
-2. Add PrinterOne.exe to allowed applications
-3. Ensure port 9100 is open for incoming connections
-4. Alternative: Use Windows Firewall to create an inbound rule for port 9100
-
-**Q: Tray icon not visible**  
-A: Check Windows notification area settings to show PrinterOne icon.
-
-**Q: Port already in use**  
-A: The server automatically kills conflicting processes. Check if another service is using port 9100.
-
-**Q: Printer not found**  
-A: Ensure the printer is installed and accessible from Windows. Use exact printer name from Windows printer list.
-
-### Firewall Configuration
-
-For proper network printing, ensure:
-- **Inbound**: Port 9100 TCP is open
-- **Application**: PrinterOne.exe is allowed through firewall
-- **Network**: Windows network discovery is enabled (optional)
-
-### Debug Mode
-Enable verbose logging by running:
-```bash
-PrinterOne.exe gui --debug
-```
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the project
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📞 Support
-
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/xtieume/PrinterOne/issues)
-- 💡 **Feature Requests**: [GitHub Issues](https://github.com/xtieume/PrinterOne/issues)
-- 📧 **Email**: xtieume@gmail.com
-
-## ⭐ Show Your Support
-
-If this project helped you, please consider giving it a ⭐ on GitHub!
-
----
-
-<div align="center">
-Made with ❤️ by <a href="mailto:xtieume@gmail.com">xtieume</a>
-</div>
+- Bugs and feature requests: [GitHub Issues](https://github.com/xtieume/PrinterOne/issues)
+- Email: xtieume@gmail.com

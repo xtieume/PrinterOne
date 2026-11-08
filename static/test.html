@@ -1,0 +1,3 @@
+<!DOCTYPE html>
+<html><head><title>PrinterOne - test</title><link rel="stylesheet" href="/base.css"><link rel="stylesheet" href="/modern.css"></head><body><div id="app"><h1>PrinterOne</h1><nav><a href="/">Status</a> | <a href="/printers">Printers</a> | <a href="/test">Test</a> | <a href="/log">Log</a> | <a href="/settings">Settings</a></nav>
+<h2>Test print</h2>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}<form method="post" action="/test"><input type="hidden" name="token" value="{{.Token}}"><label>Printer <select name="name">{{range .Printers}}<option>{{.Name}}</option>{{end}}</select></label><button type="submit">Send test page</button></form><script type="module" src="/app.js"></script></div></body></html>

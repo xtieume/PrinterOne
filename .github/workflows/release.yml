@@ -1,0 +1,53 @@
+name: Release
+
+# A `v*` tag builds the three executables (scripts/build-release) and publishes a GitHub release with them.
+# Pushing the tag is the owner's decision (the agent hook asks first). workflow_dispatch builds the files only, as
+# an artifact, without publishing anything.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version stamped into the build (no release is published)'
+        required: true
+        default: 'v0.0.0-dev'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'xtieume/PrinterOne' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: [self-hosted, printerone-mac]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Build
+        run: scripts/build-release "${{ github.event_name == 'push' && github.ref_name || inputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PrinterOne-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+          path: dist/
+          if-no-files-found: error
+  publish:
+    needs: build
+    if: github.repository == 'xtieume/PrinterOne' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, printerone-mac]
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PrinterOne-${{ github.ref_name }}
+          path: dist/
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --title "PrinterOne ${{ github.ref_name }}" --generate-notes --draft

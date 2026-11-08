@@ -1,0 +1,4 @@
+<!DOCTYPE html>
+<html><head><title>PrinterOne - log</title><link rel="stylesheet" href="/base.css"><link rel="stylesheet" href="/modern.css"></head><body><div id="app"><h1>PrinterOne</h1><nav><a href="/">Status</a> | <a href="/printers">Printers</a> | <a href="/test">Test</a> | <a href="/log">Log</a> | <a href="/settings">Settings</a></nav>
+<h2>Log</h2><form method="get" action="/log"><button type="submit">Refresh</button></form><pre id="log-lines" data-stream="/api/log/stream">{{range .Lines}}{{.}}
+{{end}}</pre><script type="module" src="/app.js"></script></div></body></html>
