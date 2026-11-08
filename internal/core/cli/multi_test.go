@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"github.com/xtieume/PrinterOne/internal/core/receiver"
 	"net"
 	"os"
 	"path/filepath"
@@ -224,7 +225,9 @@ func TestREQ_MULTI_008_LegacySlotsSharedAcrossPorts(t *testing.T) {
 	held1 := sendPort(t, ports[0], "x")
 	held2 := sendPort(t, ports[1], "x")
 	defer held2.Close()
-	time.Sleep(100 * time.Millisecond)
+	// With a shared pool a port holds a slot only for AcceptWait while idle, so a held client can wait in the
+	// backlog that long; wait until both are surely accepted and hold the two legacy slots.
+	time.Sleep(4*receiver.AcceptWait + 200*time.Millisecond)
 	sendPort(t, ports[2], "c").Close()
 	time.Sleep(500 * time.Millisecond)
 	if got := docsOn(r.sp.done(), "C"); len(got) != 0 {
